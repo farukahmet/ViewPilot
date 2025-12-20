@@ -1,0 +1,26 @@
+schema_version = "1.0.0"
+
+id = "viewpilot"
+version = "1.0.0"
+name = "ViewPilot"
+tagline = "Control, capture, and recall exactly what you see in your viewport at certain moments"
+maintainer = "Faruk Ahmet <farukahmet@gmail.com>"
+type = "add-on"
+
+blender_version_min = "4.2.0"
+tags = ["3D View", "Camera", "Scene"]
+
+website = "https://github.com/farukahmet/ViewPilot"
+tracker = "https://github.com/farukahmet/ViewPilot/issues"
+
+license = [
+    "SPDX:GPL-3.0-or-later",
+]
+
+[build]
+paths_exclude_pattern = [
+    "__pycache__/",
+    ".*",
+    "*.zip",
+    "**/private_*/",
+]
