@@ -1473,21 +1473,20 @@ class VIEW3D_OT_gallery_delete_view(bpy.types.Operator):
         return context.window_manager.invoke_confirm(self, event)
     
     def execute(self, context):
-        saved_views = context.scene.saved_views
-        if not (0 <= self.index < len(saved_views)):
+        from . import data_storage
+        
+        views = data_storage.get_saved_views()
+        if not (0 <= self.index < len(views)):
             return {'CANCELLED'}
         
-        view_name = saved_views[self.index].name
+        view_name = views[self.index].get("name", "View")
         
         # Delete associated thumbnail
-        try:
-            from .thumbnail_generator import delete_thumbnail
-            delete_thumbnail(view_name)
-        except:
-            pass
+        from .thumbnail_generator import delete_thumbnail
+        delete_thumbnail(view_name)
         
-        # Remove the view
-        saved_views.remove(self.index)
+        # Remove from JSON storage (auto-syncs to PropertyGroup)
+        data_storage.delete_saved_view(self.index)
         
         # Reset selection
         context.scene.saved_views_index = -1
