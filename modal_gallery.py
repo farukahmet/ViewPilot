@@ -45,7 +45,24 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
     _needs_refresh = False  # Flag set by external code to trigger refresh
     _context_menu_index = -1  # Index of thumbnail that was right-clicked
     _primary_area = None  # The 3D view area where gallery displays (only one)
+    _primary_region = None  # The WINDOW region of the primary area (for coordinate conversion)
     _context_area = None  # The last in-focus 3D view for create/update context
+    
+    def _get_mouse_region_coords(self, event):
+        """Convert global mouse coordinates to primary region local coordinates.
+        
+        This ensures consistent hit detection regardless of which area/region
+        the modal event originates from.
+        """
+        primary_region = VIEW3D_OT_thumbnail_gallery._primary_region
+        if not primary_region:
+            # Fallback to event's region coords
+            return event.mouse_region_x, event.mouse_region_y
+        
+        # Convert global mouse to primary region's local coords
+        mx = event.mouse_x - primary_region.x
+        my = event.mouse_y - primary_region.y
+        return mx, my
     
     @classmethod
     def poll(cls, context):
@@ -80,6 +97,11 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
         VIEW3D_OT_thumbnail_gallery._is_active = True
         VIEW3D_OT_thumbnail_gallery._instance = self
         VIEW3D_OT_thumbnail_gallery._primary_area = context.area  # Track which area shows gallery
+        # Store the WINDOW region for coordinate conversion
+        for r in context.area.regions:
+            if r.type == 'WINDOW':
+                VIEW3D_OT_thumbnail_gallery._primary_region = r
+                break
         VIEW3D_OT_thumbnail_gallery._context_area = context.area  # Initial context for operations
         
         # Initialize state
@@ -158,7 +180,7 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
 
         # Track hover state on mouse movement
         if event.type == 'MOUSEMOVE':
-            mx, my = event.mouse_region_x, event.mouse_region_y
+            mx, my = self._get_mouse_region_coords(event)
             
             # If in preview mode (MMB held), update preview on thumbnail hover
             if self._preview_index >= 0:
@@ -212,7 +234,7 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
             return {'PASS_THROUGH'}
         
         if event.type == 'LEFTMOUSE' and event.value == 'PRESS':
-            mx, my = event.mouse_region_x, event.mouse_region_y
+            mx, my = self._get_mouse_region_coords(event)
             
             # Check Refresh Button
             if self._refresh_btn_rect:
@@ -379,6 +401,7 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
         VIEW3D_OT_thumbnail_gallery._instance = None
         VIEW3D_OT_thumbnail_gallery._needs_refresh = False
         VIEW3D_OT_thumbnail_gallery._primary_area = None
+        VIEW3D_OT_thumbnail_gallery._primary_region = None
         VIEW3D_OT_thumbnail_gallery._context_area = None
         if self._draw_handler:
             bpy.types.SpaceView3D.draw_handler_remove(self._draw_handler, 'WINDOW')
@@ -409,6 +432,9 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
             if not views:
                 print("[ViewPilot] No saved views to regenerate")
                 return
+            
+            # Track which views were updated for batched save
+            updated_any = False
             
             # Get the actual viewport state (not UI properties which have callbacks)
             space = context.space_data
@@ -497,50 +523,78 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
                     # Generate thumbnail for current viewport state
                     image_name = generate_thumbnail(context, temp_view)
                     if image_name:
+                        # Update in-memory only (no disk I/O yet)
                         view_dict["thumbnail_image"] = image_name
-                        data_storage.update_saved_view(i, view_dict)
+                        updated_any = True
                 
-                # Restore actual viewport state directly
-                region.view_location = original_location
-                region.view_rotation = original_rotation
-                region.view_distance = original_distance
-                if original_perspective == 'CAMERA':
-                    region.view_perspective = 'CAMERA'
-                elif original_is_perspective:
-                    region.view_perspective = 'PERSP'
-                else:
-                    region.view_perspective = 'ORTHO'
-                space.lens = original_lens
+                # Batch save: single JSON write + single sync to all scenes
+                if updated_any:
+                    data = data_storage.load_data()
+                    data["saved_views"] = views
+                    data_storage.save_data(data)
+                    data_storage.sync_to_all_scenes()
                 
-                # Restore original scene
-                if context.window.scene != original_scene:
-                    context.window.scene = original_scene
-                    # Refresh region reference after scene switch
-                    space = context.space_data
-                    region = space.region_3d if space else None
-                    if region:
+            finally:
+                # Always restore state, even on exceptions
+                # Get fresh references in case they changed during loop
+                space = context.space_data
+                region = space.region_3d if space else None
+                
+                # Restore original scene first (may affect region reference)
+                try:
+                    if context.window.scene != original_scene:
+                        context.window.scene = original_scene
+                        # Refresh region reference after scene switch
+                        space = context.space_data
+                        region = space.region_3d if space else None
+                except Exception as restore_err:
+                    print(f"[ViewPilot] Error restoring scene: {restore_err}")
+                
+                # Restore viewport state
+                if region:
+                    try:
                         region.view_location = original_location
                         region.view_rotation = original_rotation
                         region.view_distance = original_distance
+                        if original_perspective == 'CAMERA':
+                            region.view_perspective = 'CAMERA'
+                        elif original_is_perspective:
+                            region.view_perspective = 'PERSP'
+                        else:
+                            region.view_perspective = 'ORTHO'
+                    except Exception as restore_err:
+                        print(f"[ViewPilot] Error restoring viewport state: {restore_err}")
+                
+                if space:
+                    try:
+                        space.lens = original_lens
+                    except Exception as restore_err:
+                        print(f"[ViewPilot] Error restoring lens: {restore_err}")
                 
                 # Restore original view layer
-                if original_view_layer and original_view_layer.name in [vl.name for vl in context.window.scene.view_layers]:
-                    if context.window.view_layer != original_view_layer:
-                        context.window.view_layer = original_view_layer
+                try:
+                    if original_view_layer and original_view_layer.name in [vl.name for vl in context.window.scene.view_layers]:
+                        if context.window.view_layer != original_view_layer:
+                            context.window.view_layer = original_view_layer
+                except Exception as restore_err:
+                    print(f"[ViewPilot] Error restoring view layer: {restore_err}")
                 
-                context.scene.saved_views_index = original_index
-                context.scene.world = original_world  # Restore original World
+                # Restore saved views index and world
+                try:
+                    context.scene.saved_views_index = original_index
+                    context.scene.world = original_world
+                except Exception as restore_err:
+                    print(f"[ViewPilot] Error restoring index/world: {restore_err}")
                 
                 # Reset enum property to match the index
-                # This prevents the UI from showing the last view (from loop) as selected
                 try:
                     controller.skip_enum_load = True
                     context.scene.viewpilot.saved_views_enum = str(original_index)
-                    controller.skip_enum_load = False
-                except:
+                except Exception:
+                    pass
+                finally:
                     controller.skip_enum_load = False
                 
-            finally:
                 # Always release the lock
                 controller.end_update()
             
@@ -625,7 +679,7 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
         # We only have 1 button (+ for Add)
         total_items = num_views + 1
         
-        region = context.region
+        region = VIEW3D_OT_thumbnail_gallery._primary_region or context.region
         if region is None:
             return self._get_thumb_size_max()
             
@@ -640,7 +694,7 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
     
     def _get_visible_count(self, context):
         """Calculate how many thumbnails fit in the viewport minus buttons."""
-        region = context.region
+        region = VIEW3D_OT_thumbnail_gallery._primary_region or context.region
         if region is None:
             return 0
             
@@ -659,7 +713,8 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
         """Calculate common layout parameters to ensure consistency."""
         from . import data_storage
         
-        region = context.region
+        # Use primary region for consistency (fallback to context.region for draw-time)
+        region = VIEW3D_OT_thumbnail_gallery._primary_region or context.region
         if region is None:
             return None
             
@@ -1152,7 +1207,7 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
         
         thumbs_start_x = start_x
         
-        mx, my = event.mouse_region_x, event.mouse_region_y
+        mx, my = self._get_mouse_region_coords(event)
         
         for draw_pos, i in enumerate(range(start_idx, end_idx)):
             x = thumbs_start_x + draw_pos * thumb_spacing
@@ -1185,7 +1240,7 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
         rect_end_x = start_x + total_content_width + 10
         rect_end_y = start_y + strip_height + 10
         
-        mx, my = event.mouse_region_x, event.mouse_region_y
+        mx, my = self._get_mouse_region_coords(event)
         return rect_start_x <= mx <= rect_end_x and rect_start_y <= my <= rect_end_y
     
     def _draw_hover_highlight(self, x, y, width, height):

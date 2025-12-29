@@ -47,7 +47,8 @@ class ThumbnailRenderer:
         orig_shading_single_color = shading.single_color[:]
         orig_shading_background_type = shading.background_type
         orig_shading_background_color = shading.background_color[:]
-        orig_shading_studio_light = shading.studio_light
+        # Only read studio_light when not in WIREFRAME mode (WIREFRAME has no valid studio_light)
+        orig_shading_studio_light = shading.studio_light if orig_shading_type != 'WIREFRAME' else ''
         orig_shading_studiolight_rotate_z = shading.studiolight_rotate_z
         orig_shading_studiolight_intensity = shading.studiolight_intensity
         orig_shading_studiolight_background_alpha = shading.studiolight_background_alpha
@@ -67,19 +68,42 @@ class ThumbnailRenderer:
                 # Don't apply RENDERED mode (can't capture with Cycles)
                 if saved_view.shading_type != 'RENDERED':
                     shading.type = saved_view.shading_type
-                    
-                shading.light = saved_view.shading_light
-                shading.color_type = saved_view.shading_color_type
-                shading.single_color = saved_view.shading_single_color[:]
-                shading.background_type = saved_view.shading_background_type
+                
+                # These properties may not be valid in all shading modes (e.g., WIREFRAME)
+                # Wrap in individual try/except to apply what we can
+                try:
+                    shading.light = saved_view.shading_light
+                except TypeError:
+                    pass
+                try:
+                    shading.color_type = saved_view.shading_color_type
+                except TypeError:
+                    pass
+                try:
+                    shading.single_color = saved_view.shading_single_color[:]
+                except (TypeError, AttributeError):
+                    pass
+                try:
+                    shading.background_type = saved_view.shading_background_type
+                except TypeError:
+                    pass
                 if hasattr(saved_view, 'shading_background_color'):
-                    shading.background_color = saved_view.shading_background_color[:]
+                    try:
+                        shading.background_color = saved_view.shading_background_color[:]
+                    except (TypeError, AttributeError):
+                        pass
                 if saved_view.shading_studio_light:
-                    shading.studio_light = saved_view.shading_studio_light
-                shading.studiolight_rotate_z = saved_view.shading_studiolight_rotate_z
-                shading.studiolight_intensity = saved_view.shading_studiolight_intensity
-                shading.studiolight_background_alpha = saved_view.shading_studiolight_background_alpha
-                shading.studiolight_background_blur = saved_view.shading_studiolight_background_blur
+                    try:
+                        shading.studio_light = saved_view.shading_studio_light
+                    except TypeError:
+                        pass
+                try:
+                    shading.studiolight_rotate_z = saved_view.shading_studiolight_rotate_z
+                    shading.studiolight_intensity = saved_view.shading_studiolight_intensity
+                    shading.studiolight_background_alpha = saved_view.shading_studiolight_background_alpha
+                    shading.studiolight_background_blur = saved_view.shading_studiolight_background_blur
+                except (TypeError, AttributeError):
+                    pass
                 shading.show_cavity = saved_view.shading_show_cavity
                 shading.show_object_outline = saved_view.shading_show_object_outline
                 shading.show_xray = saved_view.shading_show_xray
@@ -236,17 +260,41 @@ class ThumbnailRenderer:
             
         finally:
             # Restore all shading settings
+            # Restore type first, then other properties (some may not be valid in all modes)
             shading.type = orig_shading_type
-            shading.light = orig_shading_light
-            shading.color_type = orig_shading_color_type
-            shading.single_color = orig_shading_single_color
-            shading.background_type = orig_shading_background_type
-            shading.background_color = orig_shading_background_color
-            shading.studio_light = orig_shading_studio_light
-            shading.studiolight_rotate_z = orig_shading_studiolight_rotate_z
-            shading.studiolight_intensity = orig_shading_studiolight_intensity
-            shading.studiolight_background_alpha = orig_shading_studiolight_background_alpha
-            shading.studiolight_background_blur = orig_shading_studiolight_background_blur
+            try:
+                shading.light = orig_shading_light
+            except TypeError:
+                pass
+            try:
+                shading.color_type = orig_shading_color_type
+            except TypeError:
+                pass
+            try:
+                shading.single_color = orig_shading_single_color
+            except TypeError:
+                pass
+            try:
+                shading.background_type = orig_shading_background_type
+            except TypeError:
+                pass
+            try:
+                shading.background_color = orig_shading_background_color
+            except TypeError:
+                pass
+            # Guard against empty studio_light (invalid in WIREFRAME mode)
+            if orig_shading_studio_light:
+                try:
+                    shading.studio_light = orig_shading_studio_light
+                except TypeError:
+                    pass  # Skip if enum value is not valid for current shading type
+            try:
+                shading.studiolight_rotate_z = orig_shading_studiolight_rotate_z
+                shading.studiolight_intensity = orig_shading_studiolight_intensity
+                shading.studiolight_background_alpha = orig_shading_studiolight_background_alpha
+                shading.studiolight_background_blur = orig_shading_studiolight_background_blur
+            except TypeError:
+                pass
             shading.show_cavity = orig_shading_show_cavity
             shading.show_object_outline = orig_shading_show_object_outline
             shading.show_xray = orig_shading_show_xray

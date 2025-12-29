@@ -426,11 +426,7 @@ class ViewportCameraControlsPreferences(bpy.types.AddonPreferences):
         split_row.prop(self, "camera_passepartout", text="")
 
         # Camera sensor
-        row = col.row()
-        col = row.column(align=True)
-        split_row = col.split(factor=0.5)
-        split_row.prop(self, "show_camera_sensor")
-        split_row.prop(self, "camera_sensor_size", text="")
+        col.prop(self, "show_camera_sensor")
 
 # ============================================================================
 # HELPER FUNCTION

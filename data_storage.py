@@ -427,7 +427,8 @@ def capture_viewport_as_dict(space, region, context, name: str = "Saved View") -
         "shading_single_color": list(shading.single_color),
         "shading_background_type": shading.background_type,
         "shading_background_color": list(shading.background_color),
-        "shading_studio_light": shading.studio_light,
+        # Only read studio_light when not in WIREFRAME mode (WIREFRAME has no valid studio_light)
+        "shading_studio_light": shading.studio_light if shading.type != 'WIREFRAME' else "",
         "shading_studiolight_rotate_z": shading.studiolight_rotate_z,
         "shading_studiolight_intensity": shading.studiolight_intensity,
         "shading_studiolight_background_alpha": shading.studiolight_background_alpha,

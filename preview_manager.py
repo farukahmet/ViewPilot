@@ -43,10 +43,10 @@ def load_view_preview(view_name, thumbnail_path):
     # Use view name as identifier (spaces replaced for safety)
     preview_id = f"vp_{view_name}"
     
-    # Remove existing preview if reloading
+    # Skip if preview already exists (can't remove individual items from pcoll)
+    # The image will be updated next time the collection is cleared
     if preview_id in pcoll:
-        # Can't remove individual items, but can reload
-        pass
+        return pcoll[preview_id].icon_id
     
     # Only load if file exists
     if os.path.exists(thumbnail_path):
