@@ -599,6 +599,9 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
                 finally:
                     controller.skip_enum_load = False
                 
+                # Clear the grace period so history recording resumes immediately
+                controller.start_grace_period(0.0)
+                
                 # Always release the lock
                 controller.end_update()
             
