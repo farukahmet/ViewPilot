@@ -36,6 +36,7 @@ class VIEW3D_OT_view_history_monitor(bpy.types.Operator):
     last_selection_hash = None  # Track selection changes for orbit mode
     last_scene_count = 0  # Track scene count for UUID duplicate detection
     last_view_layer_counts = {}  # Track view layer count per scene {scene_name: count}
+    last_camera_count = 0  # Track camera count for dropdown sync
     
     # Settings
     CHECK_INTERVAL = 0.1
@@ -74,6 +75,20 @@ class VIEW3D_OT_view_history_monitor(bpy.types.Operator):
                         for vl in scene.view_layers:
                             data_storage.ensure_view_layer_uuid(vl)
                     self.last_view_layer_counts[scene.name] = current_vl_count
+            
+            # --- CAMERA COUNT CHANGE DETECTION ---
+            # If camera count changed, resync camera dropdown to prevent blank selection
+            camera_count = sum(1 for obj in context.scene.objects if obj.type == 'CAMERA')
+            if camera_count != self.last_camera_count:
+                self.last_camera_count = camera_count
+                # Resync camera dropdown to current scene camera
+                props = context.scene.viewpilot
+                active_cam = context.scene.camera
+                if active_cam:
+                    try:
+                        props.camera_enum = active_cam.name
+                    except TypeError:
+                        pass  # Enum items not yet populated
             
             # Auto-initialize if needed
             if not context.scene.viewpilot.init_complete:
@@ -402,6 +417,12 @@ class VIEW3D_OT_toggle_camera_selection(bpy.types.Operator):
             cam.select_set(False)
             if context.view_layer.objects.active == cam:
                 context.view_layer.objects.active = None
+        
+        # Sync camera dropdown to current scene camera (fixes blank dropdown after camera deletion)
+        try:
+            props.camera_enum = cam.name
+        except TypeError:
+            pass  # Enum items not yet populated
         
         return {'FINISHED'}
 
