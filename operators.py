@@ -248,9 +248,11 @@ class VIEW3D_OT_view_history_monitor(bpy.types.Operator):
                 except:
                     settle_delay = 0.3
                 if (time.time() - self.settle_start_time) > settle_delay:
-                    # Settle time passed! Save the state.
-                    print(f"[View History] Saved. (History Size: {len(utils.view_history)})")
-                    add_to_history(current_state)
+                    # Check if we should record this to history
+                    # (suppressed during VIEW_RESTORE, HISTORY_NAV, or grace periods)
+                    if controller.should_record_history():
+                        print(f"[View History] Saved. (History Size: {len(utils.view_history)})")
+                        add_to_history(current_state)
                     self.is_moving = False
                     
         return {'PASS_THROUGH'}

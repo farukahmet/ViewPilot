@@ -461,6 +461,10 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
                 print("[ViewPilot] Could not acquire lock for thumbnail regeneration")
                 return
             
+            # Start a long grace period to prevent history recording during thumbnail regen
+            # This ensures programmatic view changes don't bloat the history
+            controller.start_grace_period(60.0, UpdateSource.VIEW_RESTORE)
+            
             try:
                 for i, view_dict in enumerate(views):
                     # Navigate to this view (skip enum load to avoid callbacks)
