@@ -218,9 +218,10 @@ class ViewportCameraControlsPreferences(bpy.types.AddonPreferences):
     
     preview_size_factor: bpy.props.FloatProperty(
         name="Preview Size",
-        description="Size of enlarged preview as fraction of viewport (0.3 = 30%, 0.7 = 70%)",
+        description="Size of enlarged preview as fraction of viewport (0.2 = 20%, 1.0 = 100%)",
         default=0.5,
-        min=0.2,
+        min=0.1,
+        soft_min=0.2,
         max=1.0,
         subtype='FACTOR'
     )
