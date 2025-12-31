@@ -64,22 +64,10 @@ def update_screen_space_transform(self, context):
         controller.start_grace_period(0.2)
 
         if context.space_data.type == 'VIEW_3D':
-            # Get rotation quaternion and check if ortho
-            is_ortho = not self.is_perspective
-            
+            # Get rotation quaternion
             if self.is_camera_mode and context.scene.camera:
                 cam = context.scene.camera
-                cam_data = cam.data
                 rot_quat = cam.rotation_euler.to_quaternion()
-                is_ortho = (cam_data.type == 'ORTHO')
-                
-                # For ortho cameras, dolly (screen_y) controls ortho_scale instead of position
-                if is_ortho:
-                    # Map screen_y to ortho_scale: positive = zoom in (smaller scale)
-                    base_scale = 10.0  # Default ortho scale
-                    new_scale = max(0.1, base_scale - self.screen_y)
-                    cam_data.ortho_scale = new_scale
-                    self['focal_length'] = new_scale
             else:
                 region = context.region_data
                 if not region and context.space_data and context.space_data.type == 'VIEW_3D':
@@ -91,7 +79,6 @@ def update_screen_space_transform(self, context):
                     return # Still failed to find region
             
             right = rot_quat @ Vector((1.0, 0.0, 0.0))
-            forward = rot_quat @ Vector((0.0, 0.0, -1.0))
             up = rot_quat @ Vector((0.0, 1.0, 0.0))
             
             # If zoom has moved us from base, update base to current position first
@@ -100,9 +87,8 @@ def update_screen_space_transform(self, context):
                 current_pos = Vector((self.loc_x, self.loc_y, self.loc_z))
                 self.invalidate_zoom_state(current_pos)
             
-            # For ortho, don't apply dolly to position
-            dolly_amount = 0.0 if is_ortho else self.screen_y
-            offset = (right * self.screen_x) + (forward * dolly_amount) + (up * self.screen_z)
+            # Screen space panning: U (horizontal) and V (vertical)
+            offset = (right * self.screen_x) + (up * self.screen_z)
             base_pos = Vector(self.base_world_pos)
             new_pos = base_pos + offset
             
@@ -453,40 +439,33 @@ def update_zoom_level(self, context):
             # Camera mode: zoom is direct dolly distance along camera's local Z
             if self.is_camera_mode and context.scene.camera:
                 cam = context.scene.camera
-                cam_data = cam.data
                 
-                if cam_data.type == 'ORTHO':
-                    # For ortho cameras, zoom controls orthographic scale
-                    # Higher zoom_level = more zoomed out = larger ortho_scale
-                    new_scale = max(0.01, 10.0 + self.zoom_level)
-                    cam_data.ortho_scale = new_scale
-                    self['focal_length'] = new_scale
-                else:
-                    # For persp cameras: zoom is direct dolly distance
-                    # zoom_level = 0 means camera at base position
-                    dolly_value = self.zoom_level
-                    
-                    # If pan has moved us from base, update base to current position first
-                    if abs(self.screen_x) > 0.001 or abs(self.screen_y) > 0.001 or abs(self.screen_z) > 0.001:
-                        current_pos = Vector((self.loc_x, self.loc_y, self.loc_z))
-                        self.invalidate_pan_state(current_pos)
-                    
-                    # Apply dolly movement along camera's forward axis
-                    rot_quat = cam.rotation_euler.to_quaternion()
-                    forward = rot_quat @ Vector((0.0, 0.0, -1.0))  # Camera looks -Z
-                    
-                    # Base position is where camera was when screen space mode started
-                    base_pos = Vector(self.base_world_pos)
-                    # Move along forward axis by -dolly
-                    new_pos = base_pos + (forward * dolly_value)
-                    
-                    cam.location = new_pos
-                    self['loc_x'] = new_pos.x
-                    self['loc_y'] = new_pos.y
-                    self['loc_z'] = new_pos.z
-                    
-                    # Update orbit state - zoom changed position
-                    self.invalidate_orbit_state(new_pos, rot_quat)
+                # Note: zoom_level UI is hidden for ortho cameras (handled via ortho_scale slider)
+                # For persp cameras: zoom is direct dolly distance
+                # zoom_level = 0 means camera at base position
+                dolly_value = self.zoom_level
+                
+                # If pan has moved us from base, update base to current position first
+                if abs(self.screen_x) > 0.001 or abs(self.screen_z) > 0.001:
+                    current_pos = Vector((self.loc_x, self.loc_y, self.loc_z))
+                    self.invalidate_pan_state(current_pos)
+                
+                # Apply dolly movement along camera's forward axis
+                rot_quat = cam.rotation_euler.to_quaternion()
+                forward = rot_quat @ Vector((0.0, 0.0, -1.0))  # Camera looks -Z
+                
+                # Base position is where camera was when screen space mode started
+                base_pos = Vector(self.base_world_pos)
+                # Move along forward axis by -dolly
+                new_pos = base_pos + (forward * dolly_value)
+                
+                cam.location = new_pos
+                self['loc_x'] = new_pos.x
+                self['loc_y'] = new_pos.y
+                self['loc_z'] = new_pos.z
+                
+                # Update orbit state - zoom changed position
+                self.invalidate_orbit_state(new_pos, rot_quat)
             else:
                 # Viewport mode: dolly exactly like camera mode - move eye along forward axis
                 # This gives unlimited zoom range with consistent linear feel
@@ -500,7 +479,7 @@ def update_zoom_level(self, context):
                     
                     # If pan has moved us from base, update base to current position first
                     # This prevents jump when switching from pan to zoom
-                    if abs(self.screen_x) > 0.001 or abs(self.screen_y) > 0.001 or abs(self.screen_z) > 0.001:
+                    if abs(self.screen_x) > 0.001 or abs(self.screen_z) > 0.001:
                         current_pos = Vector((self.loc_x, self.loc_y, self.loc_z))
                         self.invalidate_pan_state(current_pos)
                     
@@ -539,7 +518,6 @@ def update_reset_axis(self, context):
     try:
         # Track which screen axis was reset for per-axis restoration
         reset_x = self.reset_screen_x
-        reset_y = self.reset_screen_y
         reset_z = self.reset_screen_z
         reset_rot = self.reset_screen_rotation
         
@@ -547,7 +525,6 @@ def update_reset_axis(self, context):
         if self.reset_loc_y: self['loc_y'] = 0.0; self['reset_loc_y'] = False
         if self.reset_loc_z: self['loc_z'] = 0.0; self['reset_loc_z'] = False
         if self.reset_screen_x: self['screen_x'] = 0.0; self['reset_screen_x'] = False
-        if self.reset_screen_y: self['screen_y'] = 0.0; self['reset_screen_y'] = False
         if self.reset_screen_z: self['screen_z'] = 0.0; self['reset_screen_z'] = False
         if self.reset_screen_rotation: 
             self['screen_rotation'] = 0.0
@@ -598,14 +575,10 @@ def update_reset_axis(self, context):
                          rot_quat = Quaternion((1,0,0,0))
                 
                 right = rot_quat @ Vector((1.0, 0.0, 0.0))
-                forward = rot_quat @ Vector((0.0, 0.0, -1.0))
                 up = rot_quat @ Vector((0.0, 1.0, 0.0))
                 
-                # Use screen_y for dolly unless ortho
-                is_ortho = not self.is_perspective
-                dolly_amount = 0.0 if is_ortho else self.screen_y
-                
-                offset = (right * self.screen_x) + (forward * dolly_amount) + (up * self.screen_z)
+                # Screen space panning: only U (horizontal) and V (vertical)
+                offset = (right * self.screen_x) + (up * self.screen_z)
                 base_pos = Vector(self.base_world_pos)
                 target_pos = base_pos + offset
                 
@@ -649,6 +622,12 @@ def update_lens_clip(self, context):
                     cam_data.lens = self.focal_length
                 else:
                     cam_data.ortho_scale = self.focal_length
+                    # Reset pan values when ortho_scale changes to prevent jumps
+                    current_pos = Vector((self.loc_x, self.loc_y, self.loc_z))
+                    self['base_world_pos'] = (current_pos.x, current_pos.y, current_pos.z)
+                    self['screen_x'] = 0.0
+                    self['screen_z'] = 0.0
+                    self['zoom_level'] = 0.0
             else:
                 # Viewport mode
                 if hasattr(context.space_data, 'region_3d'):
@@ -1028,7 +1007,6 @@ def update_saved_views_enum(self, context):
         self['base_world_pos'] = (eye_pos.x, eye_pos.y, eye_pos.z)
         
         self['screen_x'] = 0.0
-        self['screen_y'] = 0.0
         self['screen_z'] = 0.0
         
     except (ValueError, AttributeError):
@@ -1263,7 +1241,6 @@ class ViewPilotProperties(bpy.types.PropertyGroup):
     reset_loc_z: bpy.props.BoolProperty(description="Reset to 0", update=update_reset_axis)
     
     screen_x: bpy.props.FloatProperty(name="X", description="Move screen horizontally", precision=2, step=1, update=update_screen_space_transform)
-    screen_y: bpy.props.FloatProperty(name="Y", description="Move screen forward", precision=2, step=1, update=update_screen_space_transform)
     screen_z: bpy.props.FloatProperty(name="Z", description="Move screen vertically", precision=2, step=1, update=update_screen_space_transform)
     screen_rotation: bpy.props.FloatProperty(name="Rot", description="Rotate screen around its center", unit='ROTATION', precision=3, step=100, update=update_screen_rotation)
     
@@ -1271,7 +1248,6 @@ class ViewPilotProperties(bpy.types.PropertyGroup):
     base_view_distance: bpy.props.FloatProperty(default=10.0, options={'SKIP_SAVE'})  # For viewport zoom
     
     reset_screen_x: bpy.props.BoolProperty(description="Reset to 0", update=update_reset_axis)
-    reset_screen_y: bpy.props.BoolProperty(description="Reset to 0", update=update_reset_axis)
     reset_screen_z: bpy.props.BoolProperty(description="Reset to 0", update=update_reset_axis)
     reset_screen_rotation: bpy.props.BoolProperty(description="Reset to 0", update=update_reset_axis)
 
@@ -1373,7 +1349,6 @@ class ViewPilotProperties(bpy.types.PropertyGroup):
         
         self['base_world_pos'] = (new_pos.x, new_pos.y, new_pos.z)
         self['screen_x'] = 0.0
-        self['screen_y'] = 0.0
         self['screen_z'] = 0.0
         
         if new_rot:
@@ -1526,7 +1501,6 @@ class ViewPilotProperties(bpy.types.PropertyGroup):
                 self.base_world_pos = (active_cam.location.x, active_cam.location.y, active_cam.location.z)
                 self.base_rotation = (rot.x, rot.y, rot.z)
                 self.screen_x = 0.0
-                self.screen_y = 0.0
                 self.screen_z = 0.0
                 self.screen_rotation = 0.0
             else:
@@ -1572,7 +1546,6 @@ class ViewPilotProperties(bpy.types.PropertyGroup):
                 self.base_world_pos = (current_pos.x, current_pos.y, current_pos.z)
                 self.base_rotation = (self.rot_x, self.rot_y, self.rot_z)
                 self.screen_x = 0.0
-                self.screen_y = 0.0
                 self.screen_z = 0.0
                 # Reset screen space values
                 self.screen_rotation = 0.0
