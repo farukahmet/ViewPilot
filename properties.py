@@ -555,8 +555,8 @@ def update_reset_axis(self, context):
         
         if context.space_data.type == 'VIEW_3D':
             # Recalculate position using remaining offsets
-            # This will use the current (some reset to 0) screen_x/y/z values
-            if reset_x or reset_y or reset_z:
+            # This will use the current (some reset to 0) screen_x/z values
+            if reset_x or reset_z:
                 # Get rotation for screen space calculation
                 if self.is_camera_mode and context.scene.camera:
                     if hasattr(context.scene.camera, 'rotation_euler'):
