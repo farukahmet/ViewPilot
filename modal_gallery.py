@@ -1055,7 +1055,8 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
         try:
             from .preferences import get_preferences
             prefs = get_preferences()
-            size_factor = prefs.preview_size_factor
+            # Clamp to minimum 0.2 (slider shows 0-1 for visual alignment with other sliders)
+            size_factor = max(0.2, prefs.preview_size_factor)
             backdrop_opacity = prefs.preview_backdrop_opacity
         except:
             size_factor = 0.5
