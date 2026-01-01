@@ -1125,21 +1125,23 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
         """Draw highlight border for selected thumbnail using theme color."""
         # Get theme color for active object
         theme = bpy.context.preferences.themes[0].view_3d
-        color = (*theme.object_active[:3], 0.8)
+        color = (*theme.object_active[:3], 1.0)
         
+        # Draw as thick border outline instead of filled rectangle
         vertices = (
             (x, y), (x + width, y),
-            (x + width, y + height), (x, y + height)
+            (x + width, y + height), (x, y + height), (x, y)
         )
-        indices = ((0, 1, 2), (2, 3, 0))
         
         shader = gpu.shader.from_builtin('UNIFORM_COLOR')
-        batch = batch_for_shader(shader, 'TRIS', {"pos": vertices}, indices=indices)
+        batch = batch_for_shader(shader, 'LINE_STRIP', {"pos": vertices})
         
         gpu.state.blend_set('ALPHA')
+        gpu.state.line_width_set(4.0)  # Thicker border for selection
         shader.bind()
         shader.uniform_float("color", color)
         batch.draw(shader)
+        gpu.state.line_width_set(1.0)
         gpu.state.blend_set('NONE')
     
     def _draw_texture(self, texture, x, y, width, height):
@@ -1255,21 +1257,23 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
         """Draw hover highlight border using theme color."""
         # Get theme color for selected object
         theme = bpy.context.preferences.themes[0].view_3d
-        color = (*theme.object_selected[:3], 0.6)
+        color = (*theme.object_selected[:3], 0.8)
         
+        # Draw as border outline instead of filled rectangle
         vertices = (
             (x, y), (x + width, y),
-            (x + width, y + height), (x, y + height)
+            (x + width, y + height), (x, y + height), (x, y)
         )
-        indices = ((0, 1, 2), (2, 3, 0))
         
         shader = gpu.shader.from_builtin('UNIFORM_COLOR')
-        batch = batch_for_shader(shader, 'TRIS', {"pos": vertices}, indices=indices)
+        batch = batch_for_shader(shader, 'LINE_STRIP', {"pos": vertices})
         
         gpu.state.blend_set('ALPHA')
+        gpu.state.line_width_set(2.0)  # Slightly thinner for hover
         shader.bind()
         shader.uniform_float("color", color)
         batch.draw(shader)
+        gpu.state.line_width_set(1.0)
         gpu.state.blend_set('NONE')
     
     def _draw_view_name(self, context, x, y, thumb_size, view_index):
