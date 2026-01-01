@@ -917,19 +917,19 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
                     first_thumb_pos = (x, y)
                 last_thumb_pos = (x, y)
                 
-                # Draw highlight
-                if i == current_idx:
-                    self._draw_selection_highlight(x - 4, y - 4, self._thumb_size + 8, self._thumb_size + 8)
-                elif i == self._hover_index:
-                    self._draw_hover_highlight(x - 2, y - 2, self._thumb_size + 4, self._thumb_size + 4)
-                
-                # Draw content
+                # Draw content first
                 if i in self._textures:
                     self._draw_texture(self._textures[i], x, y, self._thumb_size, self._thumb_size)
                 else:
                     self._draw_placeholder(x, y, self._thumb_size, self._thumb_size, i + 1)
                 
                 self._draw_border(x, y, self._thumb_size, self._thumb_size)
+                
+                # Draw highlight border on top (at exact thumbnail position)
+                if i == current_idx:
+                    self._draw_selection_highlight(x, y, self._thumb_size, self._thumb_size)
+                elif i == self._hover_index:
+                    self._draw_hover_highlight(x, y, self._thumb_size, self._thumb_size)
                 
                 if i == self._hover_index:
                     self._draw_view_name(context, x, y, self._thumb_size, i)
