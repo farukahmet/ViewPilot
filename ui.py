@@ -250,7 +250,7 @@ def draw_viewpilot_controls(layout, context, location='popup'):
         views_ui = layout.column(align=True)        
         split = views_ui.split(align=True, factor=0.76)
         split.scale_y = 3.0
-        split.operator("view3d.save_current_view", text="Create View", icon='BOOKMARKS')
+        split.operator("view3d.save_current_view", text="+ Create View", icon='BOOKMARKS')
         split.operator("view3d.create_camera_from_view", text="", icon='OUTLINER_OB_CAMERA')
         
         # Use data_storage for view count

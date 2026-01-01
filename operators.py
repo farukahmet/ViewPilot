@@ -487,7 +487,7 @@ class VIEW3D_OT_exit_camera_view(bpy.types.Operator):
 class VIEW3D_OT_create_camera_from_view(bpy.types.Operator):
     """Create a new camera matching the current viewport look"""
     bl_idname = "view3d.create_camera_from_view"
-    bl_label = "Create Camera from View"
+    bl_label = "Create Camera from Current"
     bl_options = {'REGISTER', 'UNDO'}
     
     @classmethod

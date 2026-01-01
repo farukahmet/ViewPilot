@@ -270,12 +270,16 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
                 rx, ry, rw, rh = self._plus_btn_rect
                 if rx <= mx <= rx + rw and ry <= my <= ry + rh:
                     # Add new view - use context_area if set (tracks the non-gallery 3D view)
+                    # Fall back to primary_area (gallery's view) if context_area is None
                     ctx_area = VIEW3D_OT_thumbnail_gallery._context_area
+                    if not ctx_area:
+                        ctx_area = VIEW3D_OT_thumbnail_gallery._primary_area
+                    
                     if ctx_area:
                         # Find window containing the context area
                         for window in bpy.context.window_manager.windows:
                             for area in window.screen.areas:
-                                if area == ctx_area:
+                                if area == ctx_area and area.type == 'VIEW_3D':
                                     region = None
                                     for r in area.regions:
                                         if r.type == 'WINDOW':
@@ -288,9 +292,6 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
                             else:
                                 continue
                             break
-                    else:
-                        # Use current context (gallery's area)
-                        bpy.ops.view3d.save_current_view()
                     return {'RUNNING_MODAL'}
             
             # Check Thumbnail Click
