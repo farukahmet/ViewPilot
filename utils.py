@@ -428,6 +428,48 @@ def add_to_history(state):
     view_history_index = len(view_history) - 1
 
 
+def _reset_orbit_sliders_after_history(context, state):
+    """Reset orbit sliders to zero after history navigation.
+    
+    Since orbit values are view-relative, keeping old values after
+    navigating to a different view state would cause jumps.
+    """
+    try:
+        props = context.scene.viewpilot
+        
+        # Only reset if orbit mode is active
+        if not props.orbit_around_selection or not props.orbit_initialized:
+            return
+        
+        # Reset sliders to zero
+        props['orbit_pitch'] = 0.0
+        props['orbit_yaw'] = 0.0
+        props['screen_rotation'] = 0.0
+        props['orbit_active_axis'] = ""
+        
+        # Update orbit base to match restored view
+        # The orbit center stays the same (selection hasn't changed)
+        # but base offset and rotation need to match the restored state
+        from mathutils import Vector
+        
+        center = Vector(props.orbit_center)
+        
+        # Calculate new eye position from restored state
+        view_rot = state['view_rotation']
+        view_z = Vector((0.0, 0.0, 1.0))
+        dist = state['view_distance']
+        eye_pos = state['view_location'] + (view_rot @ view_z) * dist
+        
+        # Update base offset (from center to camera)
+        base_offset = eye_pos - center
+        props['orbit_base_offset'] = (base_offset.x, base_offset.y, base_offset.z)
+        props['orbit_base_rotation'] = (view_rot.w, view_rot.x, view_rot.y, view_rot.z)
+        props['orbit_distance'] = base_offset.length
+        
+    except Exception as e:
+        print(f"[ViewPilot] Failed to reset orbit after history: {e}")
+
+
 def history_go_back(context):
     """Move history index back and restore state. Returns the new state or None."""
     global view_history_index
@@ -457,6 +499,10 @@ def history_go_back(context):
     
     # Restore
     restore_view_state(context, state)
+    
+    # Reset orbit sliders to zero (they are view-relative, so resetting prevents jumps)
+    _reset_orbit_sliders_after_history(context, state)
+    
     return state
 
 
@@ -487,6 +533,10 @@ def history_go_forward(context):
     controller.start_grace_period(0.5, UpdateSource.HISTORY_NAV)
     
     restore_view_state(context, state)
+    
+    # Reset orbit sliders to zero (they are view-relative, so resetting prevents jumps)
+    _reset_orbit_sliders_after_history(context, state)
+    
     return state
 
 
