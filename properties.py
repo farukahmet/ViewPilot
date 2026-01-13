@@ -217,6 +217,7 @@ def update_orbit_mode_toggle(self, context):
             self['orbit_pitch'] = 0.0
             self['orbit_yaw'] = 0.0
             self['screen_rotation'] = 0.0
+            self['orbit_active_axis'] = ""  # No axis active yet
             self['orbit_base_yaw'] = 0.0
             self['orbit_base_pitch'] = 0.0
             self['orbit_distance'] = 10.0  # Temporary default
@@ -332,13 +333,17 @@ def update_orbit_mode_toggle(self, context):
 
 
 def update_orbit_transform(self, context):
-    """Apply orbit yaw/pitch/roll changes - turntable style rotation around selection.
+    """Apply orbit yaw/pitch/roll changes - trackball style rotation around selection.
     
-    The "zero" state is the framed view from when orbit was enabled.
-    All rotations are relative to that reference.
-    - Pitch: positive = view rotates UP (camera goes down/behind)
-    - Yaw: positive = view rotates RIGHT (camera goes left)
-    - Roll: via screen_rotation (camera tilts)
+    Uses camera-local axes translated to the pivot point:
+    - Pitch: rotates around axis parallel to camera's local X, through pivot
+    - Yaw: rotates around axis parallel to camera's local Y, through pivot
+    - Roll: via screen_rotation (camera tilts around view axis)
+    
+    Only ONE axis can be active at a time. When switching axes:
+    1. Commit the current rotated position as the new base
+    2. Reset ALL sliders to zero
+    3. Start the new axis from this committed base
     """
     if not self.init_complete: return
     if not self.orbit_around_selection: return
@@ -352,36 +357,116 @@ def update_orbit_transform(self, context):
         # Start grace period during drag
         controller.start_grace_period(0.2)
         
+        # Determine which axis the user is currently interacting with
+        pitch_val = self.orbit_pitch
+        yaw_val = self.orbit_yaw
+        roll_val = self.screen_rotation
+        
+        pitch_nonzero = abs(pitch_val) > 0.0001
+        yaw_nonzero = abs(yaw_val) > 0.0001
+        roll_nonzero = abs(roll_val) > 0.0001
+        
+        # Determine which axis is being used NOW
+        # If multiple are non-zero, we need to figure out which one just changed
+        current_axis = ""
+        if pitch_nonzero and not yaw_nonzero and not roll_nonzero:
+            current_axis = "pitch"
+        elif yaw_nonzero and not pitch_nonzero and not roll_nonzero:
+            current_axis = "yaw"
+        elif roll_nonzero and not pitch_nonzero and not yaw_nonzero:
+            current_axis = "roll"
+        elif pitch_nonzero or yaw_nonzero or roll_nonzero:
+            # Multiple non-zero: a new axis was just touched
+            # The new axis is whichever one JUST became non-zero
+            # We detect this by comparing with orbit_active_axis
+            prev_axis = self.orbit_active_axis
+            if prev_axis == "pitch" and (yaw_nonzero or roll_nonzero):
+                # Was pitch, now yaw or roll was added
+                current_axis = "yaw" if yaw_nonzero else "roll"
+            elif prev_axis == "yaw" and (pitch_nonzero or roll_nonzero):
+                current_axis = "pitch" if pitch_nonzero else "roll"
+            elif prev_axis == "roll" and (pitch_nonzero or yaw_nonzero):
+                current_axis = "pitch" if pitch_nonzero else "yaw"
+            elif prev_axis == "":
+                # No previous axis - pick any that's non-zero
+                if pitch_nonzero: current_axis = "pitch"
+                elif yaw_nonzero: current_axis = "yaw"
+                elif roll_nonzero: current_axis = "roll"
+            else:
+                current_axis = prev_axis  # Fallback: keep previous
+        
         # Get stored orbit parameters
         center = Vector(self.orbit_center)
-        base_offset = Vector(self.orbit_base_offset)  # Actual offset from center to camera when framed
-        base_quat = Quaternion(self.orbit_base_rotation)  # Actual camera rotation when framed
+        base_offset = Vector(self.orbit_base_offset)
+        base_quat = Quaternion(self.orbit_base_rotation)
         
-        # Sliders are DELTAS from the framed position
-        # Pitch: rotate around world X axis (or maybe local right axis?)
-        # Yaw: rotate around world Z axis
+        # If axis changed, commit current state and reset others
+        prev_axis = self.orbit_active_axis
+        if current_axis != "" and current_axis != prev_axis and prev_axis != "":
+            # Commit the rotation from the PREVIOUS axis before switching
+            if prev_axis == "pitch":
+                local_x = base_quat @ Vector((1.0, 0.0, 0.0))
+                prev_rot = Quaternion(local_x, -pitch_val)
+            elif prev_axis == "yaw":
+                local_y = base_quat @ Vector((0.0, 1.0, 0.0))
+                prev_rot = Quaternion(local_y, -yaw_val)
+            elif prev_axis == "roll":
+                prev_rot = Quaternion((0, 0, 1), roll_val)
+                # Roll is applied to quat, not offset
+                base_quat = base_quat @ prev_rot
+                prev_rot = Quaternion()  # Don't apply to offset
+            else:
+                prev_rot = Quaternion()
+            
+            # Apply previous rotation to get committed state
+            if prev_axis != "roll":
+                new_base_offset = prev_rot @ base_offset
+                new_base_quat = prev_rot @ base_quat
+            else:
+                new_base_offset = base_offset
+                new_base_quat = base_quat
+            
+            # Update base to committed state
+            self['orbit_base_offset'] = (new_base_offset.x, new_base_offset.y, new_base_offset.z)
+            self['orbit_base_rotation'] = (new_base_quat.w, new_base_quat.x, new_base_quat.y, new_base_quat.z)
+            
+            # Reset ALL sliders to zero
+            self['orbit_pitch'] = 0.0
+            self['orbit_yaw'] = 0.0
+            self['screen_rotation'] = 0.0
+            
+            # Update local variables
+            base_offset = new_base_offset
+            base_quat = new_base_quat
+            pitch_val = 0.0
+            yaw_val = 0.0
+            roll_val = 0.0
         
-        # Build delta rotation quaternions from slider values
-        # Yaw: positive = view rotates RIGHT = camera moves LEFT around Z
-        yaw_delta = Quaternion((0, 0, 1), -self.orbit_yaw)
-        # Pitch: positive = view rotates UP = camera arcs UP around X
-        pitch_delta = Quaternion((1, 0, 0), -self.orbit_pitch)
+        # Update active axis tracker
+        self['orbit_active_axis'] = current_axis
         
-        # Combine deltas: apply pitch first, then yaw (turntable style)
-        delta_rot = yaw_delta @ pitch_delta
+        # Get camera-local axes from the BASE orientation
+        local_x = base_quat @ Vector((1.0, 0.0, 0.0))  # Camera's right
+        local_y = base_quat @ Vector((0.0, 1.0, 0.0))  # Camera's up
         
-        # Apply delta rotation to the base offset to get new camera position
+        # Build rotation quaternion based on active axis
+        if current_axis == "pitch":
+            delta_rot = Quaternion(local_x, -pitch_val)
+        elif current_axis == "yaw":
+            delta_rot = Quaternion(local_y, -yaw_val)
+        else:
+            delta_rot = Quaternion()  # No orbit rotation
+        
+        # Apply delta rotation to get new camera position
         new_offset = delta_rot @ base_offset
         new_pos = center + new_offset
         
-        # Apply delta rotation to the base camera rotation to get new orientation
+        # Apply delta rotation to get new orientation
         new_quat = delta_rot @ base_quat
         
-        # Apply Roll (screen_rotation) - rotates around camera's local forward axis
-        if abs(self.screen_rotation) > 0.001:
-            # Roll is around the camera's local Z (forward/look direction)
-            # For camera, that's the -Z axis in camera space, but we use local Z for screen rotation
-            roll_quat = Quaternion((0, 0, 1), self.screen_rotation)
+        # Apply Roll (screen_rotation) - always on top of orbit rotation
+        if current_axis == "roll" or abs(roll_val) > 0.0001:
+            roll_quat = Quaternion((0, 0, 1), roll_val)
             new_quat = new_quat @ roll_quat
         
         new_euler = new_quat.to_euler('XYZ')
@@ -400,9 +485,6 @@ def update_orbit_transform(self, context):
             context.scene.camera.rotation_euler = new_euler
         else:
             set_view_location(context, new_pos, new_euler)
-        
-        # Reset dolly zoom - orbit changed position
-        self.invalidate_zoom_state(new_pos)
     finally:
         controller.end_update()
 
@@ -1262,7 +1344,7 @@ class ViewPilotProperties(bpy.types.PropertyGroup):
     # Orbit Mode Properties
     orbit_around_selection: bpy.props.BoolProperty(
         name="Orbit Selection",
-        description="Orbit camera around selected object(s) (Turntable mode)",
+        description="Orbit camera around selected object(s) (Trackball mode)",
         default=False,
         update=update_orbit_mode_toggle
     )
@@ -1277,6 +1359,7 @@ class ViewPilotProperties(bpy.types.PropertyGroup):
     orbit_initialized: bpy.props.BoolProperty(default=False, options={'SKIP_SAVE'})
     orbit_base_offset: bpy.props.FloatVectorProperty(size=3, default=(0,0,0), options={'SKIP_SAVE'})
     orbit_base_rotation: bpy.props.FloatVectorProperty(size=4, default=(1,0,0,0), options={'SKIP_SAVE'})  # Quaternion WXYZ
+    orbit_active_axis: bpy.props.StringProperty(default="", options={'SKIP_SAVE'})  # "pitch", "yaw", "roll", or "" for none
     
     # Camera mode properties
     is_camera_mode: bpy.props.BoolProperty(default=False, options={'SKIP_SAVE'})
@@ -1359,19 +1442,23 @@ class ViewPilotProperties(bpy.types.PropertyGroup):
             self['screen_rotation'] = 0.0
     
     def invalidate_orbit_state(self, new_pos, new_rot_quat=None, disable_mode=False):
-        """Reset orbit values to work from new position.
+        """Update orbit base to work from new position.
         
         Call when: Position changes from any source except orbit itself.
         Args:
             new_rot_quat: Quaternion rotation (optional, for recalculating base)
             disable_mode: If True, completely disable orbit mode.
+        
+        Note: This does NOT reset the pitch/yaw sliders. The sliders are only
+        reset by the mutual exclusion logic in update_orbit_transform or
+        via explicit reset button clicks.
         """
         if disable_mode:
             self['orbit_around_selection'] = False
             self['orbit_initialized'] = False
             return
         
-        # Only reset if orbit is currently active and initialized
+        # Only update base if orbit is currently active and initialized
         if self.orbit_around_selection and self.orbit_initialized:
             center = Vector(self.orbit_center)
             base_offset = new_pos - center
@@ -1381,9 +1468,10 @@ class ViewPilotProperties(bpy.types.PropertyGroup):
             if new_rot_quat:
                 self['orbit_base_rotation'] = (new_rot_quat.w, new_rot_quat.x, new_rot_quat.y, new_rot_quat.z)
             
-            self['orbit_pitch'] = 0.0
-            self['orbit_yaw'] = 0.0
-            self['screen_rotation'] = 0.0
+            # NOTE: We do NOT reset orbit_pitch/orbit_yaw here.
+            # The sliders are managed by the mutual exclusion logic in update_orbit_transform.
+            # Resetting them here would cause a race condition where the sliders
+            # unexpectedly jump to zero during normal operation.
     
     def invalidate_all_relative_state(self, new_pos, new_rot=None, new_rot_quat=None):
         """Reset ALL relative state when absolute position changes.
