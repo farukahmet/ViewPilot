@@ -1,5 +1,5 @@
 bl_info = {
-    "name"          : "ViewPilot",
+    "name"          : "ViewPilot_TEST",
     "description"   : "Control, capture, and recall exactly what you see in your viewport at certain moments",
     "author"        : "Faruk Ahmet",
     "version"       : (1, 0, 0),
@@ -12,6 +12,7 @@ import bpy
 import importlib
 from . import utils
 from . import preferences
+from . import debug_tools
 from . import operators
 from . import ui
 from . import properties
@@ -57,6 +58,7 @@ def register():
     # Order matters: modal_gallery must come BEFORE operators (which imports from it)
     importlib.reload(utils)
     importlib.reload(preferences)
+    importlib.reload(debug_tools)
     importlib.reload(data_storage)  # Before properties!
     importlib.reload(modal_gallery)  # Before operators!
     importlib.reload(operators)
@@ -66,6 +68,7 @@ def register():
 
     # Register Preferences
     preferences.register()
+    debug_tools.register()
     properties.register()
     operators.register()
     ui.register()
@@ -184,6 +187,8 @@ def unregister():
     
     # Unregister preferences module 
     from . import preferences as pref_module
+    from . import debug_tools as debug_tools_module
+    debug_tools_module.unregister()
     pref_module.unregister()
 
     # Unregister properties module

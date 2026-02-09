@@ -22,6 +22,8 @@ import bpy
 import bpy.utils.previews
 import os
 
+from . import debug_tools
+
 # Global storage for preview collections
 preview_collections = {}
 
@@ -73,6 +75,8 @@ def get_preview_icon_id(view_name):
 def refresh_view_preview(view_name):
     """Refresh a single view's preview in the panel gallery. Call after thumbnail generation."""
     import tempfile
+
+    debug_tools.inc("preview.refresh_one")
     
     # Find the Blender image
     image_name = f".VP_Thumb_{view_name}"
@@ -80,14 +84,15 @@ def refresh_view_preview(view_name):
     
     if img:
         try:
-            # Sanitize filename
-            safe_name = view_name.replace(" ", "_").replace(".", "_")
-            temp_path = os.path.join(tempfile.gettempdir(), f"vp_preview_{safe_name}.png")
-            img.save_render(temp_path)
-            load_view_preview(view_name, temp_path)
-            # Don't delete temp file - pcoll may need it to persist
-            # Invalidate cache so enum regenerates with new icon
-            invalidate_panel_gallery_cache()
+            with debug_tools.timed("preview.refresh_one.total"):
+                # Sanitize filename
+                safe_name = view_name.replace(" ", "_").replace(".", "_")
+                temp_path = os.path.join(tempfile.gettempdir(), f"vp_preview_{safe_name}.png")
+                img.save_render(temp_path)
+                load_view_preview(view_name, temp_path)
+                # Don't delete temp file - pcoll may need it to persist
+                # Invalidate cache so enum regenerates with new icon
+                invalidate_panel_gallery_cache()
         except:
             pass
 
@@ -96,32 +101,35 @@ def reload_all_previews(context):
     """Reload all view previews from Blender's internal images."""
     import tempfile
     from . import data_storage
+
+    debug_tools.inc("preview.reload_all")
     
-    pcoll = get_preview_collection()
-    pcoll.clear()
-    
-    saved_views = data_storage.get_saved_views()
-    for view_dict in saved_views:
-        view_name = view_dict.get("name", "View")
-        # Match the thumbnail naming convention from thumbnail_generator
-        image_name = f".VP_Thumb_{view_name}"
-        img = bpy.data.images.get(image_name)
+    with debug_tools.timed("preview.reload_all.total"):
+        pcoll = get_preview_collection()
+        pcoll.clear()
         
-        if img:
-            # Save to temp file, then load into preview collection
-            # (preview collections can only load from files)
-            try:
-                # Sanitize filename - replace spaces and special chars
-                safe_name = view_name.replace(" ", "_").replace(".", "_")
-                temp_path = os.path.join(tempfile.gettempdir(), f"vp_preview_{safe_name}.png")
-                img.save_render(temp_path)
-                load_view_preview(view_name, temp_path)
-                # Don't delete temp file - pcoll may need it to persist
-            except Exception as e:
-                pass  # Silently skip failed previews
-    
-    # Invalidate the enum items cache so it regenerates with new icon_ids
-    invalidate_panel_gallery_cache()
+        saved_views = data_storage.get_saved_views()
+        for view_dict in saved_views:
+            view_name = view_dict.get("name", "View")
+            # Match the thumbnail naming convention from thumbnail_generator
+            image_name = f".VP_Thumb_{view_name}"
+            img = bpy.data.images.get(image_name)
+            
+            if img:
+                # Save to temp file, then load into preview collection
+                # (preview collections can only load from files)
+                try:
+                    # Sanitize filename - replace spaces and special chars
+                    safe_name = view_name.replace(" ", "_").replace(".", "_")
+                    temp_path = os.path.join(tempfile.gettempdir(), f"vp_preview_{safe_name}.png")
+                    img.save_render(temp_path)
+                    load_view_preview(view_name, temp_path)
+                    # Don't delete temp file - pcoll may need it to persist
+                except Exception as e:
+                    pass  # Silently skip failed previews
+        
+        # Invalidate the enum items cache so it regenerates with new icon_ids
+        invalidate_panel_gallery_cache()
 
 
 def invalidate_panel_gallery_cache():
@@ -146,7 +154,10 @@ def get_panel_gallery_items(self, context):
     if (hasattr(get_panel_gallery_items, '_cached') and 
         len(get_panel_gallery_items._cached) > 0 and
         cached_count == current_count):
+        debug_tools.inc("enum.panel_gallery.cache_hit")
         return get_panel_gallery_items._cached
+
+    debug_tools.inc("enum.panel_gallery.items_build")
     
     # Generate new items
     items = []

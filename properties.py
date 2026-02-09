@@ -8,6 +8,7 @@ import math
 import time
 from mathutils import Vector, Euler, Quaternion
 from .state_controller import get_controller, UpdateSource, LockPriority
+from . import debug_tools
 from .utils import (
     get_view_location, set_view_location, add_to_history,
     get_selection_center
@@ -902,6 +903,8 @@ def get_saved_views_items(self, context):
     which causes garbled Unicode text in Blender's EnumProperty.
     """
     from . import data_storage
+
+    debug_tools.inc("enum.saved_views.items_build")
     
     items = []
     
@@ -945,156 +948,208 @@ get_saved_views_items._cached_items = []
 
 
 
+def invalidate_saved_views_enum_cache():
+    """Invalidate cached items for saved views EnumProperty."""
+    try:
+        get_saved_views_items._cached_items = []
+    except Exception:
+        pass
+
+
+def invalidate_saved_views_ui_caches():
+    """Invalidate caches related to saved views UI (dropdown + panel icon view)."""
+    invalidate_saved_views_enum_cache()
+    try:
+        from .preview_manager import invalidate_panel_gallery_cache
+        invalidate_panel_gallery_cache()
+    except Exception:
+        pass
+
+
+def _sync_saved_view_selection_enums(self, controller, enum_value: str):
+    """Keep dropdown and panel gallery enums in sync without triggering loads."""
+    prev_skip = controller.skip_enum_load
+    try:
+        controller.skip_enum_load = True
+        if self.saved_views_enum != enum_value:
+            try:
+                self.saved_views_enum = enum_value
+            except Exception:
+                pass
+        if self.panel_gallery_enum != enum_value:
+            try:
+                self.panel_gallery_enum = enum_value
+            except Exception:
+                pass
+    finally:
+        controller.skip_enum_load = prev_skip
+
+
+def _handle_saved_view_selection(self, context, enum_value: str, source: str):
+    """Shared handler for selecting/loading a saved view from any UI source."""
+    from . import data_storage
+
+    controller = get_controller()
+
+    # Always sync both enums for UI consistency (even during skip_enum_load)
+    _sync_saved_view_selection_enums(self, controller, enum_value)
+
+    # Skip LOADING if we're just syncing the display
+    if controller.skip_enum_load:
+        if source == "panel_gallery":
+            debug_tools.inc("enum.panel_gallery.skip_enum_load")
+        else:
+            debug_tools.inc("enum.saved_views.skip_enum_load")
+        return
+
+    # Handle blank/unselected option
+    if enum_value == 'NONE':
+        context.scene.saved_views_index = -1
+        return
+
+    if not controller.begin_update(UpdateSource.VIEW_RESTORE, LockPriority.CRITICAL):
+        debug_tools.inc("saved_view.load.blocked_by_controller")
+        return
+
+    try:
+        debug_tools.inc("saved_view.load.begin")
+        with debug_tools.timed("saved_view.load.total"):
+            index = int(enum_value)
+            # Note: saved_views_index will be set AFTER apply_view_to_viewport
+            # because apply may switch scenes, and we need to update the NEW scene's index
+
+            # Reset ghost tracking when manually loading a view
+            self.last_active_view_index = -1
+
+            # Get view from JSON storage
+            view_dict = data_storage.get_saved_view(index)
+            if not view_dict:
+                return
+
+            # Resolve space and region robustly
+            space = getattr(context, 'space_data', None)
+            region = getattr(context, 'region_data', None)
+
+            # If context is VIEW_3D but region_data is None, get region_3d from space
+            if space and getattr(space, 'type', None) == 'VIEW_3D':
+                if not region and hasattr(space, 'region_3d'):
+                    region = space.region_3d
+            else:
+                # Not in VIEW_3D context, search for one
+                space = None
+                region = None
+                if context.screen:
+                    for area in context.screen.areas:
+                        if area.type == 'VIEW_3D':
+                            # Get the SpaceView3D from this area
+                            for s in area.spaces:
+                                if s.type == 'VIEW_3D':
+                                    space = s
+                                    # Access region_3d which is the RegionView3D
+                                    if hasattr(s, 'region_3d'):
+                                        region = s.region_3d
+                                    break
+                            break
+
+            if not space or not region:
+                return
+
+            # Apply the view to the viewport using data_storage helper
+            # NOTE: This may switch scenes if remember_composition is True!
+            data_storage.apply_view_to_viewport(view_dict, space, region, context)
+
+            # IMPORTANT: After apply, context.scene may be different!
+            # Update saved_views_index and enums on the CURRENT scene (which may be new)
+            try:
+                controller.skip_enum_load = True
+                context.scene.saved_views_index = index
+                context.scene.viewpilot.saved_views_enum = str(index)
+                context.scene.viewpilot.panel_gallery_enum = str(index)
+            finally:
+                controller.skip_enum_load = False
+
+            # Get rotation for history and property updates
+            rotation = view_dict.get("rotation", [1.0, 0.0, 0.0, 0.0])
+            rot_quat = Quaternion((rotation[0], rotation[1], rotation[2], rotation[3]))
+
+            # Add this view state to history
+            new_state = {
+                'view_location': Vector(view_dict.get("location", [0, 0, 0])),
+                'view_rotation': rot_quat,
+                'view_distance': view_dict.get("distance", 10.0),
+                'view_perspective': 'PERSP' if view_dict.get("is_perspective", True) else 'ORTHO',
+                'is_perspective': view_dict.get("is_perspective", True),
+                'lens': view_dict.get("lens", 50.0),
+                'clip_start': view_dict.get("clip_start", 0.1),
+                'clip_end': view_dict.get("clip_end", 1000.0),
+                'timestamp': time.time()
+            }
+
+            add_to_history(new_state)
+
+            # Lock history recording using grace period
+            controller.start_grace_period(0.5, UpdateSource.VIEW_RESTORE)
+
+            # Update properties using direct assignment (no callback triggers)
+            pivot_pos = Vector(view_dict.get("location", [0, 0, 0]))
+            view_z = Vector((0.0, 0.0, 1.0))
+            distance = view_dict.get("distance", 10.0)
+            eye_pos = pivot_pos + (rot_quat @ view_z) * distance
+
+            self['loc_x'] = eye_pos.x
+            self['loc_y'] = eye_pos.y
+            self['loc_z'] = eye_pos.z
+
+            euler = rot_quat.to_euler()
+            self['rot_x'] = euler.x
+            self['rot_y'] = euler.y
+            self['rot_z'] = euler.z
+
+            is_persp = view_dict.get("is_perspective", True)
+            if is_persp:
+                self['focal_length'] = view_dict.get("lens", 50.0)
+            else:
+                self['focal_length'] = distance
+            self['clip_start'] = view_dict.get("clip_start", 0.1)
+            self['clip_end'] = view_dict.get("clip_end", 1000.0)
+
+            self['is_perspective'] = is_persp
+
+            # Reset zoom to 0 (it's a relative delta, not absolute)
+            # base_world_pos is the reference point for future zoom changes
+            self['zoom_level'] = 0.0
+            self['base_world_pos'] = (eye_pos.x, eye_pos.y, eye_pos.z)
+
+            self['screen_x'] = 0.0
+            self['screen_z'] = 0.0
+
+            debug_tools.inc("saved_view.load.success")
+    except (ValueError, AttributeError):
+        pass
+    finally:
+        controller.end_update()
+
+
+
 def update_panel_gallery_enum(self, context):
     """Load the selected view when panel gallery enum changes."""
     # Handle blank/unselected option
     if self.panel_gallery_enum == 'NONE':
         return
-    
-    # Simply sync to saved_views_enum - its update callback does the actual loading
-    self.saved_views_enum = self.panel_gallery_enum
+
+    controller = get_controller()
+    if controller.skip_enum_load:
+        debug_tools.inc("enum.panel_gallery.skip_enum_load")
+        return
+
+    debug_tools.inc("enum.panel_gallery.selection_change")
+    _handle_saved_view_selection(self, context, self.panel_gallery_enum, source="panel_gallery")
 
 
 def update_saved_views_enum(self, context):
     """Load the selected view when enum changes (for saved_views_enum dropdown)."""
-    from . import data_storage
-    
-    controller = get_controller()
-    
-    # Always sync panel_gallery_enum to keep UI consistent
-    # (This must happen even during skip_enum_load)
-    if self.panel_gallery_enum != self.saved_views_enum:
-        try:
-            self.panel_gallery_enum = self.saved_views_enum
-        except:
-            pass
-    
-    # Skip LOADING if we're just syncing the display
-    if controller.skip_enum_load:
-        return
-    
-    # Handle blank/unselected option
-    if self.saved_views_enum == 'NONE':
-        context.scene.saved_views_index = -1
-        return
-    
-    if not controller.begin_update(UpdateSource.VIEW_RESTORE, LockPriority.CRITICAL):
-        return
-    
-    try:
-        index = int(self.saved_views_enum)
-        # Note: saved_views_index will be set AFTER apply_view_to_viewport
-        # because apply may switch scenes, and we need to update the NEW scene's index
-        
-        # Reset ghost tracking when manually loading a view
-        self.last_active_view_index = -1
-        
-        # Get view from JSON storage
-        view_dict = data_storage.get_saved_view(index)
-        if not view_dict:
-            return
-        
-        # Resolve space and region robustly
-        space = getattr(context, 'space_data', None)
-        region = getattr(context, 'region_data', None)
-        
-        # If context is VIEW_3D but region_data is None, get region_3d from space
-        if space and getattr(space, 'type', None) == 'VIEW_3D':
-            if not region and hasattr(space, 'region_3d'):
-                region = space.region_3d
-        else:
-            # Not in VIEW_3D context, search for one
-            space = None
-            region = None
-            if context.screen:
-                for area in context.screen.areas:
-                    if area.type == 'VIEW_3D':
-                        # Get the SpaceView3D from this area
-                        for s in area.spaces:
-                            if s.type == 'VIEW_3D':
-                                space = s
-                                # Access region_3d which is the RegionView3D
-                                if hasattr(s, 'region_3d'):
-                                    region = s.region_3d
-                                break
-                        break
-        
-        if not space or not region:
-            return
-        
-        # Apply the view to the viewport using data_storage helper
-        # NOTE: This may switch scenes if remember_composition is True!
-        data_storage.apply_view_to_viewport(view_dict, space, region, context)
-        
-        # IMPORTANT: After apply, context.scene may be different!
-        # Update saved_views_index and enum on the CURRENT scene (which may be new)
-        try:
-            controller.skip_enum_load = True
-            context.scene.saved_views_index = index
-            context.scene.viewpilot.saved_views_enum = str(index)
-            context.scene.viewpilot.panel_gallery_enum = str(index)
-        finally:
-            controller.skip_enum_load = False
-        
-        # Get rotation for history and property updates
-        rotation = view_dict.get("rotation", [1.0, 0.0, 0.0, 0.0])
-        rot_quat = Quaternion((rotation[0], rotation[1], rotation[2], rotation[3]))
-        
-        # Add this view state to history
-        new_state = {
-            'view_location': Vector(view_dict.get("location", [0, 0, 0])),
-            'view_rotation': rot_quat,
-            'view_distance': view_dict.get("distance", 10.0),
-            'view_perspective': 'PERSP' if view_dict.get("is_perspective", True) else 'ORTHO',
-            'is_perspective': view_dict.get("is_perspective", True),
-            'lens': view_dict.get("lens", 50.0),
-            'clip_start': view_dict.get("clip_start", 0.1),
-            'clip_end': view_dict.get("clip_end", 1000.0),
-            'timestamp': time.time()
-        }
-        
-        add_to_history(new_state)
-        
-        # Lock history recording using grace period
-        controller.start_grace_period(0.5, UpdateSource.VIEW_RESTORE)
-        
-        # Update properties using direct assignment (no callback triggers)
-        pivot_pos = Vector(view_dict.get("location", [0, 0, 0]))
-        view_z = Vector((0.0, 0.0, 1.0))
-        distance = view_dict.get("distance", 10.0)
-        eye_pos = pivot_pos + (rot_quat @ view_z) * distance
-        
-        self['loc_x'] = eye_pos.x
-        self['loc_y'] = eye_pos.y
-        self['loc_z'] = eye_pos.z
-        
-        euler = rot_quat.to_euler()
-        self['rot_x'] = euler.x
-        self['rot_y'] = euler.y
-        self['rot_z'] = euler.z
-        
-        is_persp = view_dict.get("is_perspective", True)
-        if is_persp:
-            self['focal_length'] = view_dict.get("lens", 50.0)
-        else:
-            self['focal_length'] = distance
-        self['clip_start'] = view_dict.get("clip_start", 0.1)
-        self['clip_end'] = view_dict.get("clip_end", 1000.0)
-        
-        self['is_perspective'] = is_persp
-        
-        # Reset zoom to 0 (it's a relative delta, not absolute)
-        # base_world_pos is the reference point for future zoom changes
-        self['zoom_level'] = 0.0
-        self['base_world_pos'] = (eye_pos.x, eye_pos.y, eye_pos.z)
-        
-        self['screen_x'] = 0.0
-        self['screen_z'] = 0.0
-        
-    except (ValueError, AttributeError):
-        pass
-    finally:
-        controller.end_update()
+    debug_tools.inc("enum.saved_views.selection_change")
+    _handle_saved_view_selection(self, context, self.saved_views_enum, source="dropdown")
 
 
 # ============================================================================

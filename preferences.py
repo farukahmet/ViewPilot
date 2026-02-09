@@ -86,6 +86,12 @@ class ViewportCameraControlsPreferences(bpy.types.AddonPreferences):
         min=5,
         max=100
     )
+
+    debug_enabled: bpy.props.BoolProperty(
+        name="Debug Mode",
+        description="Enable ViewPilot debug counters and timings (prints to console)",
+        default=False
+    )
     
     settle_delay: bpy.props.FloatProperty(
         name="Settle Delay",
@@ -323,6 +329,18 @@ class ViewportCameraControlsPreferences(bpy.types.AddonPreferences):
                             row.label(text=label)
                             row.prop(kmi, "type", text="", full_event=True)
                             break
+
+        # --- Debug ---
+        box = col_left.box()
+        row = box.row()
+        row.label(text="DEBUG", icon='INFO')
+
+        col = box.column(align=True)
+        col.prop(self, "debug_enabled")
+
+        row = col.row(align=True)
+        row.operator("viewpilot.debug_print_stats", text="Print Stats")
+        row.operator("viewpilot.debug_reset_stats", text="Reset Stats")
         
         # ===== RIGHT COLUMN =====
         col_right = split.column()

@@ -1352,8 +1352,12 @@ class VIEW3D_OT_reorder_views(bpy.types.Operator):
     
     def execute(self, context):
         # Refresh galleries after reordering
-        from .preview_manager import invalidate_panel_gallery_cache
-        invalidate_panel_gallery_cache()
+        try:
+            from .properties import invalidate_saved_views_ui_caches
+            invalidate_saved_views_ui_caches()
+        except Exception:
+            from .preview_manager import invalidate_panel_gallery_cache
+            invalidate_panel_gallery_cache()
         
         if VIEW3D_OT_thumbnail_gallery._is_active:
             VIEW3D_OT_thumbnail_gallery.request_refresh()
@@ -1405,8 +1409,12 @@ class VIEW3D_OT_move_view_up(bpy.types.Operator):
                 controller.skip_enum_load = False
             
             # Refresh galleries
-            from .preview_manager import invalidate_panel_gallery_cache
-            invalidate_panel_gallery_cache()
+            try:
+                from .properties import invalidate_saved_views_ui_caches
+                invalidate_saved_views_ui_caches()
+            except Exception:
+                from .preview_manager import invalidate_panel_gallery_cache
+                invalidate_panel_gallery_cache()
             
             if VIEW3D_OT_thumbnail_gallery._is_active:
                 VIEW3D_OT_thumbnail_gallery.request_refresh()
@@ -1458,8 +1466,12 @@ class VIEW3D_OT_move_view_down(bpy.types.Operator):
                 controller.skip_enum_load = False
             
             # Refresh galleries
-            from .preview_manager import invalidate_panel_gallery_cache
-            invalidate_panel_gallery_cache()
+            try:
+                from .properties import invalidate_saved_views_ui_caches
+                invalidate_saved_views_ui_caches()
+            except Exception:
+                from .preview_manager import invalidate_panel_gallery_cache
+                invalidate_panel_gallery_cache()
             
             if VIEW3D_OT_thumbnail_gallery._is_active:
                 VIEW3D_OT_thumbnail_gallery.request_refresh()
