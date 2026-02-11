@@ -16,6 +16,8 @@ from . import debug_tools
 from . import operators
 from . import ui
 from . import properties
+from . import temp_paths
+from . import thumbnail_generator
 from . import modal_gallery
 from . import preview_manager
 from . import data_storage
@@ -54,17 +56,31 @@ addon_keymaps = []
 
 
 def register():
-    # Reload modules to pick up changes without restarting Blender
-    # Order matters: modal_gallery must come BEFORE operators (which imports from it)
+    # Reload modules to pick up changes without restarting Blender.
+    # Order matters:
+    # - thumbnail_generator must come BEFORE operators, because operators imports
+    #   generate_thumbnail/delete_thumbnail directly.
+    # - modal_gallery must come BEFORE operators (operators imports from it).
     importlib.reload(utils)
     importlib.reload(preferences)
     importlib.reload(debug_tools)
     importlib.reload(data_storage)  # Before properties!
+    importlib.reload(temp_paths)
+    importlib.reload(thumbnail_generator)  # Before operators!
     importlib.reload(modal_gallery)  # Before operators!
     importlib.reload(operators)
     importlib.reload(ui)
     importlib.reload(properties)
     importlib.reload(preview_manager)
+    try:
+        print(
+            "[ViewPilot] Thumbnail module loaded:",
+            getattr(thumbnail_generator, "__file__", "<unknown>"),
+            "version=",
+            getattr(thumbnail_generator, "THUMBNAIL_RENDERER_VERSION", "<unknown>"),
+        )
+    except Exception:
+        pass
 
     # Register Preferences
     preferences.register()

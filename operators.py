@@ -2,6 +2,7 @@
 
 import bpy
 import time
+import traceback
 from mathutils import Vector, Quaternion
 
 from . import utils
@@ -816,11 +817,19 @@ class VIEW3D_OT_save_current_view(bpy.types.Operator):
             # Notify gallery to refresh if open
             if VIEW3D_OT_thumbnail_gallery._is_active:
                 VIEW3D_OT_thumbnail_gallery.request_refresh()
-            # Reload preview collection for grid gallery (separate cache from modal gallery)
-            from .preview_manager import reload_all_previews
-            reload_all_previews(context)
         except Exception as e:
-            print(f"[ViewPilot] Thumbnail generation failed: {e}")
+            try:
+                from . import thumbnail_generator as _thumb_mod
+                thumb_module = getattr(_thumb_mod, "__file__", "<unknown>")
+                thumb_version = getattr(_thumb_mod, "THUMBNAIL_RENDERER_VERSION", "<unknown>")
+            except Exception:
+                thumb_module = "<import-failed>"
+                thumb_version = "<import-failed>"
+            print(
+                f"[ViewPilot] Thumbnail generation failed: {e} "
+                f"(thumb_module={thumb_module}, thumb_version={thumb_version})"
+            )
+            traceback.print_exc()
         
         # Set as active
         context.scene.saved_views_index = new_index
@@ -1054,11 +1063,19 @@ class VIEW3D_OT_update_saved_view(bpy.types.Operator):
             # Notify gallery to refresh if open
             if VIEW3D_OT_thumbnail_gallery._is_active:
                 VIEW3D_OT_thumbnail_gallery.request_refresh()
-            # Reload preview collection for grid gallery (separate cache from modal gallery)
-            from .preview_manager import reload_all_previews
-            reload_all_previews(context)
         except Exception as e:
-            print(f"[ViewPilot] Thumbnail regeneration failed: {e}")
+            try:
+                from . import thumbnail_generator as _thumb_mod
+                thumb_module = getattr(_thumb_mod, "__file__", "<unknown>")
+                thumb_version = getattr(_thumb_mod, "THUMBNAIL_RENDERER_VERSION", "<unknown>")
+            except Exception:
+                thumb_module = "<import-failed>"
+                thumb_version = "<import-failed>"
+            print(
+                f"[ViewPilot] Thumbnail regeneration failed: {e} "
+                f"(thumb_module={thumb_module}, thumb_version={thumb_version})"
+            )
+            traceback.print_exc()
         
         # Update in JSON storage
         data_storage.update_saved_view(index, view_dict)

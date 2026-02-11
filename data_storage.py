@@ -595,93 +595,6 @@ def apply_view_to_viewport(view_dict: Dict[str, Any], space, region, context) ->
         return view_dict.get(key, default)
     
     # =========================================================================
-    # Apply Perspective (if remember_perspective is True)
-    # =========================================================================
-    if get("remember_perspective", True):
-        rotation = get("rotation", [1.0, 0.0, 0.0, 0.0])
-        rot_quat = Quaternion((rotation[0], rotation[1], rotation[2], rotation[3]))
-        
-        location = get("location", [0.0, 0.0, 0.0])
-        region.view_location = Vector(location)
-        region.view_rotation = rot_quat
-        region.view_distance = get("distance", 10.0)
-        
-        # Set perspective/ortho mode
-        if get("is_perspective", True):
-            region.view_perspective = 'PERSP'
-        else:
-            region.view_perspective = 'ORTHO'
-        
-        space.lens = get("lens", 50.0)
-        space.clip_start = get("clip_start", 0.1)
-        space.clip_end = get("clip_end", 1000.0)
-    
-    # =========================================================================
-    # Apply Shading (if remember_shading is True)
-    # =========================================================================
-    if get("remember_shading", False):
-        shading = space.shading
-        shading.type = get("shading_type", "SOLID")
-        shading.light = get("shading_light", "STUDIO")
-        shading.color_type = get("shading_color_type", "MATERIAL")
-        shading.single_color = tuple(get("shading_single_color", [0.8, 0.8, 0.8]))
-        shading.background_type = get("shading_background_type", "THEME")
-        shading.background_color = tuple(get("shading_background_color", [0.05, 0.05, 0.05]))
-        
-        studio_light = get("shading_studio_light", "")
-        if studio_light:
-            shading.studio_light = studio_light
-        
-        shading.studiolight_rotate_z = get("shading_studiolight_rotate_z", 0.0)
-        shading.studiolight_intensity = get("shading_studiolight_intensity", 1.0)
-        shading.studiolight_background_alpha = get("shading_studiolight_background_alpha", 0.0)
-        shading.studiolight_background_blur = get("shading_studiolight_background_blur", 0.5)
-        shading.use_world_space_lighting = get("shading_use_world_space_lighting", False)
-        shading.show_cavity = get("shading_show_cavity", False)
-        shading.cavity_type = get("shading_cavity_type", "WORLD")
-        shading.cavity_ridge_factor = get("shading_cavity_ridge_factor", 1.0)
-        shading.cavity_valley_factor = get("shading_cavity_valley_factor", 1.0)
-        shading.curvature_ridge_factor = get("shading_curvature_ridge_factor", 1.0)
-        shading.curvature_valley_factor = get("shading_curvature_valley_factor", 1.0)
-        shading.show_object_outline = get("shading_show_object_outline", False)
-        shading.object_outline_color = tuple(get("shading_object_outline_color", [0.0, 0.0, 0.0]))
-        shading.show_xray = get("shading_show_xray", False)
-        shading.xray_alpha = get("shading_xray_alpha", 0.5)
-        shading.show_shadows = get("shading_show_shadows", False)
-        shading.shadow_intensity = get("shading_shadow_intensity", 0.5)
-        shading.use_scene_lights = get("shading_use_scene_lights", False)
-        shading.use_scene_world = get("shading_use_scene_world", False)
-        
-        # Apply saved World datablock if stored and exists
-        selected_world = get("shading_selected_world", "")
-        if selected_world and selected_world in bpy.data.worlds:
-            context.scene.world = bpy.data.worlds[selected_world]
-    
-    # =========================================================================
-    # Apply Overlays (if remember_overlays is True)
-    # =========================================================================
-    if get("remember_overlays", False):
-        overlay = space.overlay
-        overlay.show_overlays = get("overlays_show_overlays", True)
-        overlay.show_floor = get("overlays_show_floor", True)
-        overlay.show_axis_x = get("overlays_show_axis_x", True)
-        overlay.show_axis_y = get("overlays_show_axis_y", True)
-        overlay.show_axis_z = get("overlays_show_axis_z", False)
-        overlay.show_text = get("overlays_show_text", True)
-        overlay.show_cursor = get("overlays_show_cursor", True)
-        overlay.show_outline_selected = get("overlays_show_outline_selected", True)
-        overlay.show_wireframes = get("overlays_show_wireframes", False)
-        overlay.wireframe_threshold = get("overlays_wireframe_threshold", 1.0)
-        overlay.wireframe_opacity = get("overlays_wireframe_opacity", 1.0)
-        overlay.show_face_orientation = get("overlays_show_face_orientation", False)
-        overlay.show_relationship_lines = get("overlays_show_relationship_lines", True)
-        overlay.show_bones = get("overlays_show_bones", True)
-        overlay.show_motion_paths = get("overlays_show_motion_paths", True)
-        overlay.show_object_origins = get("overlays_show_object_origins", True)
-        overlay.show_annotation = get("overlays_show_annotation", True)
-        overlay.show_extras = get("overlays_show_extras", True)
-    
-    # =========================================================================
     # Apply Composition (if remember_composition is True)
     # =========================================================================
     if get("remember_composition", False):
@@ -714,6 +627,94 @@ def apply_view_to_viewport(view_dict: Dict[str, Any], space, region, context) ->
         
         if target_vl and context.window.view_layer != target_vl:
             context.window.view_layer = target_vl
+
+    # =========================================================================
+    # Apply Perspective (if remember_perspective is True)
+    # =========================================================================
+    if get("remember_perspective", True):
+        rotation = get("rotation", [1.0, 0.0, 0.0, 0.0])
+        rot_quat = Quaternion((rotation[0], rotation[1], rotation[2], rotation[3]))
+
+        location = get("location", [0.0, 0.0, 0.0])
+        region.view_location = Vector(location)
+        region.view_rotation = rot_quat
+        region.view_distance = get("distance", 10.0)
+
+        # Set perspective/ortho mode
+        if get("is_perspective", True):
+            region.view_perspective = 'PERSP'
+        else:
+            region.view_perspective = 'ORTHO'
+
+        space.lens = get("lens", 50.0)
+        space.clip_start = get("clip_start", 0.1)
+        space.clip_end = get("clip_end", 1000.0)
+
+    # =========================================================================
+    # Apply Shading (if remember_shading is True)
+    # =========================================================================
+    if get("remember_shading", False):
+        shading = space.shading
+        shading.type = get("shading_type", "SOLID")
+        shading.light = get("shading_light", "STUDIO")
+        shading.color_type = get("shading_color_type", "MATERIAL")
+        shading.single_color = tuple(get("shading_single_color", [0.8, 0.8, 0.8]))
+        shading.background_type = get("shading_background_type", "THEME")
+        shading.background_color = tuple(get("shading_background_color", [0.05, 0.05, 0.05]))
+
+        studio_light = get("shading_studio_light", "")
+        if studio_light:
+            shading.studio_light = studio_light
+
+        shading.studiolight_rotate_z = get("shading_studiolight_rotate_z", 0.0)
+        shading.studiolight_intensity = get("shading_studiolight_intensity", 1.0)
+        shading.studiolight_background_alpha = get("shading_studiolight_background_alpha", 0.0)
+        shading.studiolight_background_blur = get("shading_studiolight_background_blur", 0.5)
+        shading.use_world_space_lighting = get("shading_use_world_space_lighting", False)
+        shading.show_cavity = get("shading_show_cavity", False)
+        shading.cavity_type = get("shading_cavity_type", "WORLD")
+        shading.cavity_ridge_factor = get("shading_cavity_ridge_factor", 1.0)
+        shading.cavity_valley_factor = get("shading_cavity_valley_factor", 1.0)
+        shading.curvature_ridge_factor = get("shading_curvature_ridge_factor", 1.0)
+        shading.curvature_valley_factor = get("shading_curvature_valley_factor", 1.0)
+        shading.show_object_outline = get("shading_show_object_outline", False)
+        shading.object_outline_color = tuple(get("shading_object_outline_color", [0.0, 0.0, 0.0]))
+        shading.show_xray = get("shading_show_xray", False)
+        shading.xray_alpha = get("shading_xray_alpha", 0.5)
+        shading.show_shadows = get("shading_show_shadows", False)
+        shading.shadow_intensity = get("shading_shadow_intensity", 0.5)
+        shading.use_scene_lights = get("shading_use_scene_lights", False)
+        shading.use_scene_world = get("shading_use_scene_world", False)
+
+        # Apply saved World datablock if stored and exists.
+        # Composition is intentionally applied first, so this writes to the target scene.
+        selected_world = get("shading_selected_world", "")
+        if selected_world and selected_world in bpy.data.worlds:
+            context.scene.world = bpy.data.worlds[selected_world]
+
+    # =========================================================================
+    # Apply Overlays (if remember_overlays is True)
+    # =========================================================================
+    if get("remember_overlays", False):
+        overlay = space.overlay
+        overlay.show_overlays = get("overlays_show_overlays", True)
+        overlay.show_floor = get("overlays_show_floor", True)
+        overlay.show_axis_x = get("overlays_show_axis_x", True)
+        overlay.show_axis_y = get("overlays_show_axis_y", True)
+        overlay.show_axis_z = get("overlays_show_axis_z", False)
+        overlay.show_text = get("overlays_show_text", True)
+        overlay.show_cursor = get("overlays_show_cursor", True)
+        overlay.show_outline_selected = get("overlays_show_outline_selected", True)
+        overlay.show_wireframes = get("overlays_show_wireframes", False)
+        overlay.wireframe_threshold = get("overlays_wireframe_threshold", 1.0)
+        overlay.wireframe_opacity = get("overlays_wireframe_opacity", 1.0)
+        overlay.show_face_orientation = get("overlays_show_face_orientation", False)
+        overlay.show_relationship_lines = get("overlays_show_relationship_lines", True)
+        overlay.show_bones = get("overlays_show_bones", True)
+        overlay.show_motion_paths = get("overlays_show_motion_paths", True)
+        overlay.show_object_origins = get("overlays_show_object_origins", True)
+        overlay.show_annotation = get("overlays_show_annotation", True)
+        overlay.show_extras = get("overlays_show_extras", True)
 
 
 # =============================================================================
@@ -825,4 +826,3 @@ def sync_to_all_scenes() -> int:
         return view_count
     finally:
         IS_SYNCING = False
-

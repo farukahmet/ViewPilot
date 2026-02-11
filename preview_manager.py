@@ -1,193 +1,203 @@
+"""Preview Collection Manager for ViewPilot panel icon gallery.
+
+Preview collections only load file-backed images, so the packed thumbnail images
+must be exported to temporary PNG files before loading into the preview cache.
 """
-Preview Collection Manager for ViewPilot Panel Gallery.
 
-Manages GPU preview icons for displaying saved view thumbnails in template_icon_view.
-
-Why use temp files
---------------------------------
-bpy.utils.previews (preview collections) can ONLY load images from file paths.
-There is no API to load directly from bpy.data.images. Therefore we have to:
-
-1. Get the Blender internal image (.VP_Thumb_*)
-2. Save it to a temp file with save_render()
-3. Load that file into pcoll with pcoll.load(path)
-
-pcoll.load() appears to either load lazily or keep a reference to the filepath, 
-so deleting the temp files too quickly results in blank icons. They are small PNGs 
-in the system temp folder and get overwritten on each refresh - the OS will eventually 
-clean them up.
-"""
+import os
 
 import bpy
 import bpy.utils.previews
-import os
 
 from . import debug_tools
+from .temp_paths import make_temp_png_path, sanitize_token
 
-# Global storage for preview collections
+# Global storage for preview collections and per-view active preview ids.
 preview_collections = {}
+_active_preview_ids = {}
+_preview_serial = 0
+
+
+def _next_preview_id(view_name):
+    """Generate a unique preview id for incremental replacement."""
+    global _preview_serial
+    _preview_serial += 1
+    return f"vp_{sanitize_token(view_name)}_{_preview_serial}"
+
+
+def _write_preview_temp_file(image, view_name):
+    """Export a packed blender image to temp file for preview loading."""
+    temp_path = make_temp_png_path("vp_preview_", view_name)
+    try:
+        image.save_render(temp_path)
+        return temp_path
+    except Exception as e:
+        debug_tools.log(f"preview temp export failed for '{view_name}': {e}")
+        return None
 
 
 def get_preview_collection():
     """Get the ViewPilot preview collection, creating if needed."""
-    global preview_collections
-    
     if "viewpilot_previews" not in preview_collections:
         preview_collections["viewpilot_previews"] = bpy.utils.previews.new()
-    
     return preview_collections["viewpilot_previews"]
 
 
-def load_view_preview(view_name, thumbnail_path):
-    """Load a thumbnail image into the preview collection."""
+def load_view_preview(view_name, thumbnail_path, replace_existing=True):
+    """Load or replace a thumbnail image in the preview collection."""
+    if not thumbnail_path or not os.path.exists(thumbnail_path):
+        return 0
+
     pcoll = get_preview_collection()
-    
-    # Use view name as identifier (spaces replaced for safety)
-    preview_id = f"vp_{view_name}"
-    
-    # Skip if preview already exists (can't remove individual items from pcoll)
-    # The image will be updated next time the collection is cleared
-    if preview_id in pcoll:
+
+    if replace_existing:
+        old_id = _active_preview_ids.get(view_name)
+        if old_id and old_id in pcoll:
+            try:
+                del pcoll[old_id]
+            except Exception:
+                # Some Blender versions don't reliably support entry deletion.
+                pass
+
+    # Use a fresh id on replacement, because individual entry removal from
+    # preview collections is not reliable across Blender versions.
+    if replace_existing or view_name not in _active_preview_ids:
+        preview_id = _next_preview_id(view_name)
+    else:
+        preview_id = _active_preview_ids[view_name]
+
+    try:
+        pcoll.load(preview_id, thumbnail_path, 'IMAGE')
+        _active_preview_ids[view_name] = preview_id
         return pcoll[preview_id].icon_id
-    
-    # Only load if file exists
-    if os.path.exists(thumbnail_path):
-        try:
-            pcoll.load(preview_id, thumbnail_path, 'IMAGE')
-            return pcoll[preview_id].icon_id
-        except Exception as e:
-            print(f"[ViewPilot] Could not load preview for {view_name}: {e}")
-            return 0
-    
-    return 0
+    except Exception as e:
+        print(f"[ViewPilot] Could not load preview for {view_name}: {e}")
+        return 0
 
 
 def get_preview_icon_id(view_name):
-    """Get the icon_id for a view's preview, or 0 if not loaded."""
+    """Get the icon id for a view preview, or 0 if unavailable."""
     pcoll = get_preview_collection()
-    preview_id = f"vp_{view_name}"
-    
-    if preview_id in pcoll:
+    preview_id = _active_preview_ids.get(view_name)
+    if preview_id and preview_id in pcoll:
         return pcoll[preview_id].icon_id
     return 0
 
 
-def refresh_view_preview(view_name):
-    """Refresh a single view's preview in the panel gallery. Call after thumbnail generation."""
-    import tempfile
+def remove_view_preview(view_name):
+    """Forget active preview mapping for a deleted/renamed view."""
+    if view_name in _active_preview_ids:
+        del _active_preview_ids[view_name]
+    invalidate_panel_gallery_cache()
 
+
+def refresh_view_preview(view_name):
+    """Refresh only one view preview after thumbnail regeneration."""
     debug_tools.inc("preview.refresh_one")
-    
-    # Find the Blender image
+
     image_name = f".VP_Thumb_{view_name}"
     img = bpy.data.images.get(image_name)
-    
-    if img:
-        try:
-            with debug_tools.timed("preview.refresh_one.total"):
-                # Sanitize filename
-                safe_name = view_name.replace(" ", "_").replace(".", "_")
-                temp_path = os.path.join(tempfile.gettempdir(), f"vp_preview_{safe_name}.png")
-                img.save_render(temp_path)
-                load_view_preview(view_name, temp_path)
-                # Don't delete temp file - pcoll may need it to persist
-                # Invalidate cache so enum regenerates with new icon
-                invalidate_panel_gallery_cache()
-        except:
-            pass
+    if not img:
+        debug_tools.inc("preview.refresh_one.no_image")
+        return 0
+
+    with debug_tools.timed("preview.refresh_one.total"):
+        temp_path = _write_preview_temp_file(img, view_name)
+        if not temp_path:
+            debug_tools.inc("preview.refresh_one.write_failed")
+            return 0
+
+        icon_id = load_view_preview(view_name, temp_path, replace_existing=True)
+        if icon_id:
+            debug_tools.inc("preview.refresh_one.success")
+            invalidate_panel_gallery_cache()
+        else:
+            debug_tools.inc("preview.refresh_one.load_failed")
+        return icon_id
 
 
 def reload_all_previews(context):
-    """Reload all view previews from Blender's internal images."""
-    import tempfile
+    """Reload all view previews from packed blender images."""
     from . import data_storage
+    global _preview_serial
 
     debug_tools.inc("preview.reload_all")
-    
+
     with debug_tools.timed("preview.reload_all.total"):
         pcoll = get_preview_collection()
         pcoll.clear()
-        
-        saved_views = data_storage.get_saved_views()
-        for view_dict in saved_views:
+        _active_preview_ids.clear()
+        _preview_serial = 0
+
+        loaded = 0
+        for view_dict in data_storage.get_saved_views():
             view_name = view_dict.get("name", "View")
-            # Match the thumbnail naming convention from thumbnail_generator
             image_name = f".VP_Thumb_{view_name}"
             img = bpy.data.images.get(image_name)
-            
-            if img:
-                # Save to temp file, then load into preview collection
-                # (preview collections can only load from files)
-                try:
-                    # Sanitize filename - replace spaces and special chars
-                    safe_name = view_name.replace(" ", "_").replace(".", "_")
-                    temp_path = os.path.join(tempfile.gettempdir(), f"vp_preview_{safe_name}.png")
-                    img.save_render(temp_path)
-                    load_view_preview(view_name, temp_path)
-                    # Don't delete temp file - pcoll may need it to persist
-                except Exception as e:
-                    pass  # Silently skip failed previews
-        
-        # Invalidate the enum items cache so it regenerates with new icon_ids
+            if not img:
+                continue
+
+            temp_path = _write_preview_temp_file(img, view_name)
+            if not temp_path:
+                continue
+
+            if load_view_preview(view_name, temp_path, replace_existing=True):
+                loaded += 1
+
         invalidate_panel_gallery_cache()
+        debug_tools.log(f"previews reloaded: {loaded}")
 
 
 def invalidate_panel_gallery_cache():
-    """Clear the panel gallery enum cache. Call when views are added/deleted/renamed."""
+    """Clear cached enum items for panel icon gallery."""
     if hasattr(get_panel_gallery_items, '_cached'):
         get_panel_gallery_items._cached = []
         get_panel_gallery_items._cached_count = 0
+        get_panel_gallery_items._cached_signature = ()
 
 
 def get_panel_gallery_items(self, context):
     """Generate enum items for panel gallery template_icon_view."""
     from . import data_storage
-    
-    pcoll = get_preview_collection()
-    
-    # Check if we can return cached items (views haven't changed)
+
     saved_views = data_storage.get_saved_views()
     current_count = len(saved_views)
+    current_signature = tuple(v.get("name", "") for v in saved_views)
     cached_count = getattr(get_panel_gallery_items, '_cached_count', 0)
-    
-    # If we have cached items and count matches, return cache
-    if (hasattr(get_panel_gallery_items, '_cached') and 
+    cached_signature = getattr(get_panel_gallery_items, '_cached_signature', ())
+
+    # Cache hit only when both count and names match.
+    if (hasattr(get_panel_gallery_items, '_cached') and
         len(get_panel_gallery_items._cached) > 0 and
-        cached_count == current_count):
+        cached_count == current_count and
+        cached_signature == current_signature):
         debug_tools.inc("enum.panel_gallery.cache_hit")
         return get_panel_gallery_items._cached
 
     debug_tools.inc("enum.panel_gallery.items_build")
-    
-    # Generate new items
+
     items = []
-    
     for i, view_dict in enumerate(saved_views):
         view_name = view_dict.get("name", f"View {i+1}")
-        preview_id = f"vp_{view_name}"
-        icon_id = pcoll[preview_id].icon_id if preview_id in pcoll else 0
-        
-        # CRITICAL: Create persistent string copies to prevent garbage collection
-        # Blender's C UI holds references to these strings, so they must not be deallocated
+        icon_id = get_preview_icon_id(view_name)
+
         identifier = str(i)
-        name = str(view_name)  # Explicit copy
+        name = str(view_name)
         description = f"Navigate to {view_name}"
-        
-        # Format: (identifier, name, description, icon_id, index)
         items.append((identifier, name, description, icon_id, i))
-    
-    # Ensure at least one item (Blender requirement)
+
     if not items:
         items.append(('NONE', "No Views", "No saved views", 0, 0))
-    
-    # CRITICAL: Cache items AND count to prevent Python garbage collection
-    # This must happen BEFORE returning
+
     get_panel_gallery_items._cached = items
     get_panel_gallery_items._cached_count = current_count
+    get_panel_gallery_items._cached_signature = current_signature
     return items
+
 
 get_panel_gallery_items._cached = []
 get_panel_gallery_items._cached_count = 0
+get_panel_gallery_items._cached_signature = ()
 
 
 class VIEWPILOT_OT_reload_previews(bpy.types.Operator):
@@ -224,12 +234,13 @@ def register():
     global preview_collections
     preview_collections["viewpilot_previews"] = bpy.utils.previews.new()
     bpy.utils.register_class(VIEWPILOT_OT_reload_previews)
-    bpy.app.handlers.load_post.append(on_file_load)
+    if on_file_load not in bpy.app.handlers.load_post:
+        bpy.app.handlers.load_post.append(on_file_load)
 
 
 def unregister():
     """Clean up preview collection."""
-    global preview_collections
+    global preview_collections, _preview_serial
     
     # Remove handler
     if on_file_load in bpy.app.handlers.load_post:
@@ -240,3 +251,5 @@ def unregister():
     for pcoll in preview_collections.values():
         bpy.utils.previews.remove(pcoll)
     preview_collections.clear()
+    _active_preview_ids.clear()
+    _preview_serial = 0

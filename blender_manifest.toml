@@ -1,8 +1,8 @@
 schema_version = "1.0.0"
 
-id = "viewpilot"
+id = "viewpilot_test"
 version = "1.0.0"
-name = "ViewPilot"
+name = "ViewPilot_TEST"
 tagline = "Control, capture, and recall exactly what you see"
 maintainer = "Faruk Ahmet <farukahmet@gmail.com>"
 type = "add-on"

@@ -11,6 +11,7 @@ import blf
 import gpu
 from gpu_extras.batch import batch_for_shader
 from mathutils import Vector, Quaternion
+from .temp_paths import make_temp_png_path
 
 # Module-level backup of draw handler - survives class reload
 _backup_draw_handler = None
@@ -388,6 +389,7 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
                             break
                     if region:
                         VIEW3D_OT_thumbnail_gallery._primary_area = area
+                        VIEW3D_OT_thumbnail_gallery._primary_region = region
                         # Restart modal in new context to fix event handling
                         VIEW3D_OT_thumbnail_gallery._is_active = False
                         with bpy.context.temp_override(window=window, area=area, region=region):
@@ -426,6 +428,7 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
         try:
             from .thumbnail_generator import generate_thumbnail
             from .state_controller import get_controller, UpdateSource, LockPriority
+            from .preview_manager import reload_all_previews
             from . import data_storage
             from types import SimpleNamespace
             
@@ -526,7 +529,7 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
                     temp_view.rotation = tuple(rotation)
                     
                     # Generate thumbnail for current viewport state
-                    image_name = generate_thumbnail(context, temp_view)
+                    image_name = generate_thumbnail(context, temp_view, refresh_preview=False)
                     if image_name:
                         # Update in-memory only (no disk I/O yet)
                         view_dict["thumbnail_image"] = image_name
@@ -538,6 +541,7 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
                     data["saved_views"] = views
                     data_storage.save_data(data)
                     data_storage.sync_to_all_scenes()
+                    reload_all_previews(context)
                 
             finally:
                 # Always restore state, even on exceptions
@@ -651,11 +655,9 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
                         else:
                             # Blender 4.x: Use save_render() to apply display transform
                             # This fixes washed-out colors from Non-Color images
-                            import tempfile
                             import os
-                            
-                            safe_name = thumb_name.replace(" ", "_").replace(".", "_")
-                            temp_path = os.path.join(tempfile.gettempdir(), f"vp_gallery_{safe_name}.png")
+
+                            temp_path = make_temp_png_path("vp_gallery_", thumb_name)
                             img.save_render(temp_path)
                             
                             # Load the color-corrected image
@@ -875,6 +877,10 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
             context = bpy.context
             # Only draw in the primary area (prevents drawing in all 3D views)
             if context.area != VIEW3D_OT_thumbnail_gallery._primary_area:
+                return
+            # Only draw in the primary WINDOW region. This avoids duplicate
+            # draws in multi-region viewports (e.g. quad view splits).
+            if context.region != VIEW3D_OT_thumbnail_gallery._primary_region:
                 return
             # Safety check - only draw in 3D views
             if not context.area or context.area.type != 'VIEW_3D':
