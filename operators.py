@@ -193,6 +193,7 @@ class VIEW3D_OT_view_history_monitor(bpy.types.Operator):
                         try:
                             controller.skip_enum_load = True
                             context.scene.viewpilot.saved_views_enum = 'NONE'
+                            _set_panel_gallery_enum_safe(context, 'NONE')
                             controller.skip_enum_load = False
                         except:
                             controller.skip_enum_load = False
@@ -210,6 +211,7 @@ class VIEW3D_OT_view_history_monitor(bpy.types.Operator):
                              try:
                                  controller.skip_enum_load = True
                                  context.scene.viewpilot.saved_views_enum = 'NONE'
+                                 _set_panel_gallery_enum_safe(context, 'NONE')
                                  controller.skip_enum_load = False
                              except:
                                  controller.skip_enum_load = False
@@ -719,6 +721,79 @@ def set_skip_enum_load(value):
     get_controller().skip_enum_load = value
 
 
+def _set_panel_gallery_enum_safe(context, preferred_value=None):
+    """Set panel_gallery_enum with a runtime-valid identifier."""
+    controller = get_controller()
+    prev_skip = controller.skip_enum_load
+
+    props = context.scene.viewpilot
+    seen = set()
+    candidates = []
+
+    if preferred_value is not None:
+        candidates.append(str(preferred_value))
+
+    try:
+        view_count = len(context.scene.saved_views)
+    except Exception:
+        view_count = 0
+
+    try:
+        current_idx = int(context.scene.saved_views_index)
+    except Exception:
+        current_idx = -1
+
+    if view_count > 0:
+        valid_ids = {str(i) for i in range(view_count)}
+    else:
+        valid_ids = {"NONE"}
+
+    if view_count > 0:
+        if 0 <= current_idx < view_count:
+            candidates.append(str(current_idx))
+        if 0 <= getattr(props, "last_active_view_index", -1) < view_count:
+            candidates.append(str(props.last_active_view_index))
+        candidates.append("0")
+        candidates.append(str(view_count - 1))
+
+    candidates.append("NONE")
+
+    try:
+        controller.skip_enum_load = True
+        for candidate in candidates:
+            if candidate in seen:
+                continue
+            seen.add(candidate)
+            if candidate not in valid_ids:
+                continue
+            try:
+                props.panel_gallery_enum = candidate
+                return True
+            except Exception:
+                continue
+        return False
+    finally:
+        controller.skip_enum_load = prev_skip
+
+
+def _sync_saved_view_enums_safe(context, enum_value):
+    """Synchronize dropdown + panel enums without assuming panel supports NONE."""
+    props = context.scene.viewpilot
+    try:
+        props.saved_views_enum = enum_value
+    except Exception:
+        pass
+    _set_panel_gallery_enum_safe(context, enum_value)
+
+
+def _push_undo_step(message):
+    """Explicitly push an undo step when called from nested operator chains."""
+    try:
+        bpy.ops.ed.undo_push(message=message)
+    except Exception:
+        pass
+
+
 class VIEW3D_OT_save_current_view(bpy.types.Operator):
     """Save the current viewport as a new view"""
     bl_idname = "view3d.save_current_view"
@@ -838,12 +913,13 @@ class VIEW3D_OT_save_current_view(bpy.types.Operator):
         # We temporarily skip loading because we are already AT the view
         try:
             set_skip_enum_load(True)
-            context.scene.viewpilot.saved_views_enum = str(new_index)
+            _sync_saved_view_enums_safe(context, str(new_index))
             set_skip_enum_load(False)
         except:
              set_skip_enum_load(False)
         
         self.report({'INFO'}, f"Saved view: {view_name}")
+        _push_undo_step("ViewPilot Save View")
         return {'FINISHED'}
 
 
@@ -926,9 +1002,26 @@ class VIEW3D_OT_delete_saved_view(bpy.types.Operator):
 
         # Capture current active index before deletion so we can remap it.
         active_before = context.scene.saved_views_index
+
+        # Pre-clear dynamic enum selections so they never reference a soon-to-be
+        # invalid index while sync_to_all_scenes updates the backing collection.
+        try:
+            set_skip_enum_load(True)
+            context.scene.saved_views_index = -1
+            context.scene.viewpilot.saved_views_enum = 'NONE'
+            _set_panel_gallery_enum_safe(context, 'NONE')
+        finally:
+            set_skip_enum_load(False)
         
         # Remove the view from JSON storage (auto-syncs to PropertyGroup)
         data_storage.delete_saved_view(index)
+
+        # Invalidate both dropdown and panel icon enum caches after index shift.
+        try:
+            from .properties import invalidate_saved_views_ui_caches
+            invalidate_saved_views_ui_caches()
+        except Exception:
+            pass
         
         # Notify gallery to refresh AFTER removal (so indices are correct)
         if VIEW3D_OT_thumbnail_gallery._is_active:
@@ -956,11 +1049,10 @@ class VIEW3D_OT_delete_saved_view(bpy.types.Operator):
             context.scene.saved_views_index = new_active
             if new_active >= 0:
                 enum_value = str(new_active)
-                context.scene.viewpilot.saved_views_enum = enum_value
-                context.scene.viewpilot.panel_gallery_enum = enum_value
+                _sync_saved_view_enums_safe(context, enum_value)
             else:
                 context.scene.viewpilot.saved_views_enum = 'NONE'
-                context.scene.viewpilot.panel_gallery_enum = 'NONE'
+                _set_panel_gallery_enum_safe(context, 'NONE')
         finally:
             set_skip_enum_load(False)
         
@@ -968,6 +1060,7 @@ class VIEW3D_OT_delete_saved_view(bpy.types.Operator):
         
         # Clean up World fake users that may no longer be needed
         utils.cleanup_world_fake_users()
+        _push_undo_step("ViewPilot Delete View")
         
         return {'FINISHED'}
 
@@ -1111,7 +1204,7 @@ class VIEW3D_OT_update_saved_view(bpy.types.Operator):
         # Force dropdown update
         try:
              set_skip_enum_load(True)
-             params.saved_views_enum = str(index)
+             _sync_saved_view_enums_safe(context, str(index))
              set_skip_enum_load(False)
         except:
              set_skip_enum_load(False)
@@ -1246,8 +1339,8 @@ class VIEW3D_OT_prev_saved_view(bpy.types.Operator):
         new_index = current_index - 1
         if new_index < 0:
             new_index = len(views) - 1
-            
-        # Set the shared enum property
+
+        # Trigger normal enum callback path so the viewport actually loads.
         context.scene.viewpilot.saved_views_enum = str(new_index)
         
         # Report which view we're on
@@ -1277,8 +1370,8 @@ class VIEW3D_OT_next_saved_view(bpy.types.Operator):
         new_index = current_index + 1
         if new_index >= len(views):
             new_index = 0
-            
-        # Set the shared enum property
+
+        # Trigger normal enum callback path so the viewport actually loads.
         context.scene.viewpilot.saved_views_enum = str(new_index)
         
         # Report which view we're on
@@ -1307,7 +1400,7 @@ class VIEW3D_OT_set_saved_views_index(bpy.types.Operator):
         try:
             controller.skip_enum_load = True
             context.scene.saved_views_index = self.index
-            context.scene.viewpilot.saved_views_enum = str(self.index)
+            _sync_saved_view_enums_safe(context, str(self.index))
         finally:
             controller.skip_enum_load = False
         
@@ -1443,7 +1536,7 @@ class VIEW3D_OT_move_view_up(bpy.types.Operator):
             try:
                 controller.skip_enum_load = True
                 context.scene.saved_views_index = new_index
-                context.scene.viewpilot.saved_views_enum = str(new_index)
+                _sync_saved_view_enums_safe(context, str(new_index))
             finally:
                 controller.skip_enum_load = False
             
@@ -1500,7 +1593,7 @@ class VIEW3D_OT_move_view_down(bpy.types.Operator):
             try:
                 controller.skip_enum_load = True
                 context.scene.saved_views_index = new_index
-                context.scene.viewpilot.saved_views_enum = str(new_index)
+                _sync_saved_view_enums_safe(context, str(new_index))
             finally:
                 controller.skip_enum_load = False
             

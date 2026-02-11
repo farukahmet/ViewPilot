@@ -23,6 +23,9 @@ SCHEMA_VERSION = 1
 # Custom property key for UUID tracking
 UUID_PROP_KEY = "viewpilot_uuid"
 
+# Re-entrancy guard for load_data() to prevent callback recursion storms.
+_LOAD_DATA_GUARD = False
+
 
 # =============================================================================
 # UUID HELPERS - For tracking scenes/view layers by persistent ID
@@ -275,8 +278,16 @@ def _save_raw_data(text: bpy.types.Text, data: Dict[str, Any]) -> None:
 
 def load_data() -> Dict[str, Any]:
     """Load all ViewPilot data from storage."""
-    text = get_data_text()
-    return _load_raw_data(text)
+    global _LOAD_DATA_GUARD
+    if _LOAD_DATA_GUARD:
+        return _get_empty_data()
+
+    _LOAD_DATA_GUARD = True
+    try:
+        text = get_data_text()
+        return _load_raw_data(text)
+    finally:
+        _LOAD_DATA_GUARD = False
 
 
 def save_data(data: Dict[str, Any]) -> None:
@@ -812,16 +823,67 @@ def sync_to_all_scenes() -> int:
     try:
         views = get_saved_views()
         view_count = len(views)
+        controller = None
+        prev_skip_enum_load = False
+        try:
+            from .state_controller import get_controller
+            controller = get_controller()
+            prev_skip_enum_load = controller.skip_enum_load
+            controller.skip_enum_load = True
+        except Exception:
+            controller = None
         
-        for scene in bpy.data.scenes:
-            if not hasattr(scene, 'saved_views'):
-                continue
-            
-            # Clear and repopulate
-            scene.saved_views.clear()
-            for view_dict in views:
-                new_view = scene.saved_views.add()
-                dict_to_view(view_dict, new_view)
+        try:
+            for scene in bpy.data.scenes:
+                if not hasattr(scene, 'saved_views'):
+                    continue
+                
+                # Clear and repopulate
+                scene.saved_views.clear()
+                for view_dict in views:
+                    new_view = scene.saved_views.add()
+                    dict_to_view(view_dict, new_view)
+
+                # Clamp per-scene active index so stale values (e.g. 17 when only
+                # 10 views exist) cannot survive sync and trigger enum warnings.
+                try:
+                    raw_index = int(getattr(scene, "saved_views_index", -1))
+                except Exception:
+                    raw_index = -1
+                clamped_index = raw_index if 0 <= raw_index < view_count else -1
+                try:
+                    scene.saved_views_index = clamped_index
+                except Exception:
+                    pass
+
+                # Keep enum properties aligned with clamped indices.
+                props = getattr(scene, "viewpilot", None)
+                if props:
+                    try:
+                        if clamped_index >= 0:
+                            props.saved_views_enum = str(clamped_index)
+                        else:
+                            props.saved_views_enum = 'NONE'
+                    except Exception:
+                        pass
+
+                    if view_count > 0:
+                        panel_index = clamped_index
+                        if panel_index < 0:
+                            ghost_idx = int(getattr(props, "last_active_view_index", -1))
+                            panel_index = ghost_idx if 0 <= ghost_idx < view_count else 0
+                        try:
+                            props.panel_gallery_enum = str(panel_index)
+                        except Exception:
+                            pass
+                    else:
+                        try:
+                            props.panel_gallery_enum = 'NONE'
+                        except Exception:
+                            pass
+        finally:
+            if controller is not None:
+                controller.skip_enum_load = prev_skip_enum_load
         
         return view_count
     finally:

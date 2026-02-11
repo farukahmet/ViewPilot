@@ -16,6 +16,8 @@ from .temp_paths import make_temp_png_path, sanitize_token
 preview_collections = {}
 _active_preview_ids = {}
 _preview_serial = 0
+_last_saved_views_signature = ()
+_undo_refresh_queued = False
 
 
 def _next_preview_id(view_name):
@@ -23,6 +25,89 @@ def _next_preview_id(view_name):
     global _preview_serial
     _preview_serial += 1
     return f"vp_{sanitize_token(view_name)}_{_preview_serial}"
+
+
+def _compute_saved_views_signature():
+    """Build a cheap signature so undo/redo refresh only runs when needed."""
+    from . import data_storage
+
+    try:
+        views = data_storage.get_saved_views()
+    except Exception:
+        return ()
+
+    signature = []
+    for view in views:
+        signature.append(
+            (
+                view.get("name", ""),
+                view.get("thumbnail_image", ""),
+            )
+        )
+    return tuple(signature)
+
+
+def _preview_cache_out_of_sync(signature):
+    """Return True when preview mappings don't match current saved views."""
+    expected_names = [entry[0] for entry in signature]
+    if len(_active_preview_ids) != len(expected_names):
+        return True
+
+    try:
+        pcoll = get_preview_collection()
+    except Exception:
+        return True
+
+    for view_name in expected_names:
+        preview_id = _active_preview_ids.get(view_name)
+        if not preview_id:
+            return True
+        if preview_id not in pcoll:
+            return True
+    return False
+
+
+def _mark_saved_views_signature():
+    """Update the cached signature for change detection."""
+    global _last_saved_views_signature
+    _last_saved_views_signature = _compute_saved_views_signature()
+
+
+def _request_gallery_refresh():
+    """Request modal gallery texture reload if it is active."""
+    try:
+        from .modal_gallery import VIEW3D_OT_thumbnail_gallery
+
+        if VIEW3D_OT_thumbnail_gallery._is_active:
+            VIEW3D_OT_thumbnail_gallery.request_refresh()
+    except Exception:
+        pass
+
+
+def _queue_undo_refresh(reason):
+    """Queue a one-shot refresh after undo/redo changes saved views."""
+    global _undo_refresh_queued
+    if _undo_refresh_queued:
+        return
+
+    _undo_refresh_queued = True
+
+    def _delayed_refresh():
+        global _undo_refresh_queued
+        _undo_refresh_queued = False
+        try:
+            context = bpy.context
+            if context and hasattr(context, 'scene') and context.scene:
+                reload_all_previews(context)
+                _request_gallery_refresh()
+                debug_tools.log(f"undo/redo preview refresh applied ({reason})")
+        except Exception as e:
+            debug_tools.log(f"undo/redo preview refresh failed ({reason}): {e}")
+        finally:
+            _mark_saved_views_signature()
+        return None
+
+    bpy.app.timers.register(_delayed_refresh, first_interval=0.05)
 
 
 def _write_preview_temp_file(image, view_name):
@@ -222,11 +307,34 @@ def on_file_load(dummy):
             context = bpy.context
             if context and hasattr(context, 'scene') and context.scene:
                 reload_all_previews(context)
+                _request_gallery_refresh()
         except:
             pass
+        finally:
+            _mark_saved_views_signature()
         return None  # Don't repeat
     
     bpy.app.timers.register(delayed_reload, first_interval=0.5)
+
+
+@bpy.app.handlers.persistent
+def on_undo_post(dummy):
+    """Refresh previews after undo only when saved views actually changed."""
+    current_signature = _compute_saved_views_signature()
+    if (current_signature == _last_saved_views_signature and
+        not _preview_cache_out_of_sync(current_signature)):
+        return
+    _queue_undo_refresh("undo")
+
+
+@bpy.app.handlers.persistent
+def on_redo_post(dummy):
+    """Refresh previews after redo only when saved views actually changed."""
+    current_signature = _compute_saved_views_signature()
+    if (current_signature == _last_saved_views_signature and
+        not _preview_cache_out_of_sync(current_signature)):
+        return
+    _queue_undo_refresh("redo")
 
 
 def register():
@@ -236,15 +344,24 @@ def register():
     bpy.utils.register_class(VIEWPILOT_OT_reload_previews)
     if on_file_load not in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.append(on_file_load)
+    if on_undo_post not in bpy.app.handlers.undo_post:
+        bpy.app.handlers.undo_post.append(on_undo_post)
+    if on_redo_post not in bpy.app.handlers.redo_post:
+        bpy.app.handlers.redo_post.append(on_redo_post)
+    _mark_saved_views_signature()
 
 
 def unregister():
     """Clean up preview collection."""
-    global preview_collections, _preview_serial
+    global preview_collections, _preview_serial, _last_saved_views_signature, _undo_refresh_queued
     
     # Remove handler
     if on_file_load in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.remove(on_file_load)
+    if on_undo_post in bpy.app.handlers.undo_post:
+        bpy.app.handlers.undo_post.remove(on_undo_post)
+    if on_redo_post in bpy.app.handlers.redo_post:
+        bpy.app.handlers.redo_post.remove(on_redo_post)
     
     bpy.utils.unregister_class(VIEWPILOT_OT_reload_previews)
     
@@ -253,3 +370,5 @@ def unregister():
     preview_collections.clear()
     _active_preview_ids.clear()
     _preview_serial = 0
+    _last_saved_views_signature = ()
+    _undo_refresh_queued = False

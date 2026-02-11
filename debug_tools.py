@@ -17,6 +17,7 @@ import bpy
 _counters: DefaultDict[str, int] = defaultdict(int)
 _timing_total_ms: DefaultDict[str, float] = defaultdict(float)
 _timing_count: DefaultDict[str, int] = defaultdict(int)
+_enabled_guard = False
 
 
 def _get_prefs():
@@ -27,8 +28,15 @@ def _get_prefs():
 
 
 def enabled() -> bool:
-    prefs = _get_prefs()
-    return bool(getattr(prefs, "debug_enabled", False))
+    global _enabled_guard
+    if _enabled_guard:
+        return False
+    _enabled_guard = True
+    try:
+        prefs = _get_prefs()
+        return bool(getattr(prefs, "debug_enabled", False))
+    finally:
+        _enabled_guard = False
 
 
 def inc(name: str, amount: int = 1) -> None:

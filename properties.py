@@ -904,9 +904,17 @@ def get_saved_views_items(self, context):
     """
     from . import data_storage
 
-    debug_tools.inc("enum.saved_views.items_build")
-    
+    # Guard against nested RNA callback re-entry.
+    if getattr(get_saved_views_items, "_building", False):
+        cached = getattr(get_saved_views_items, "_cached_items", [])
+        if cached:
+            return cached
+        return [('NONE', "-", "No saved view selected")]
+
+    get_saved_views_items._building = True
     items = []
+    saved_views = []
+    stale_idx = -1
     
     # Determine the name for the 'Not Saved' / Ghost option
     none_label = "—"  # Default (Em Dash)
@@ -914,6 +922,7 @@ def get_saved_views_items(self, context):
     if context and hasattr(context, 'scene') and context.scene:
         props = context.scene.viewpilot
         current_idx = context.scene.saved_views_index
+        stale_idx = current_idx
         last_idx = props.last_active_view_index
         
         # Get views from JSON storage
@@ -930,21 +939,34 @@ def get_saved_views_items(self, context):
             except:
                 pass
 
-    # Always include the blank/None option to ensure list indices don't shift
-    items.append(('NONE', none_label, "No saved view selected"))
-    
-    # Get views from JSON storage
-    saved_views = data_storage.get_saved_views()
-    for i, view in enumerate(saved_views):
-        # Use index as identifier (ASCII-safe), name for display
-        items.append((str(i), view.get("name", f"View {i+1}"), f"View {i+1}"))
-    
-    # CRITICAL: Cache items to prevent garbage collection of Unicode strings
-    get_saved_views_items._cached_items = items
-    return items
+    try:
+        # Always include the blank/None option to ensure list indices don't shift
+        items.append(('NONE', none_label, "No saved view selected"))
+        
+        if not saved_views:
+            saved_views = data_storage.get_saved_views()
+        for i, view in enumerate(saved_views):
+            # Use index as identifier (ASCII-safe), name for display
+            items.append((str(i), view.get("name", f"View {i+1}"), f"View {i+1}"))
+
+        # Transitional compatibility: if Blender is still holding a stale
+        # enum value while scenes/files are syncing, include it once so RNA
+        # doesn't spam warnings before our clamping logic runs.
+        if stale_idx >= 0:
+            stale_id = str(stale_idx)
+            valid_ids = {item[0] for item in items}
+            if stale_id not in valid_ids:
+                items.append((stale_id, "(syncing)", "Temporary stale selection"))
+        
+        # CRITICAL: Cache items to prevent garbage collection of Unicode strings
+        get_saved_views_items._cached_items = items
+        return items
+    finally:
+        get_saved_views_items._building = False
 
 # Initialize cache
 get_saved_views_items._cached_items = []
+get_saved_views_items._building = False
 
 
 
@@ -966,21 +988,73 @@ def invalidate_saved_views_ui_caches():
         pass
 
 
+def _set_panel_gallery_enum_safe(self, preferred_value=None):
+    """Set panel_gallery_enum to a valid runtime identifier."""
+    controller = get_controller()
+    prev_skip = controller.skip_enum_load
+
+    seen = set()
+    candidates = []
+
+    if preferred_value is not None:
+        candidates.append(str(preferred_value))
+
+    scene = getattr(self, "id_data", None)
+    view_count = 0
+    current_idx = -1
+    try:
+        if scene and hasattr(scene, "saved_views"):
+            view_count = len(scene.saved_views)
+            current_idx = int(getattr(scene, "saved_views_index", -1))
+    except Exception:
+        view_count = 0
+        current_idx = -1
+
+    if view_count > 0:
+        valid_ids = {str(i) for i in range(view_count)}
+    else:
+        valid_ids = {"NONE"}
+
+    if view_count > 0:
+        if 0 <= current_idx < view_count:
+            candidates.append(str(current_idx))
+        if 0 <= getattr(self, "last_active_view_index", -1) < view_count:
+            candidates.append(str(self.last_active_view_index))
+        candidates.append("0")
+        candidates.append(str(view_count - 1))
+
+    candidates.append("NONE")
+
+    try:
+        controller.skip_enum_load = True
+        for candidate in candidates:
+            if candidate in seen:
+                continue
+            seen.add(candidate)
+            if candidate not in valid_ids:
+                continue
+            try:
+                self.panel_gallery_enum = candidate
+                return True
+            except Exception:
+                continue
+        return False
+    finally:
+        controller.skip_enum_load = prev_skip
+
+
 def _sync_saved_view_selection_enums(self, controller, enum_value: str):
     """Keep dropdown and panel gallery enums in sync without triggering loads."""
     prev_skip = controller.skip_enum_load
     try:
         controller.skip_enum_load = True
-        if self.saved_views_enum != enum_value:
-            try:
-                self.saved_views_enum = enum_value
-            except Exception:
-                pass
-        if self.panel_gallery_enum != enum_value:
-            try:
-                self.panel_gallery_enum = enum_value
-            except Exception:
-                pass
+        try:
+            self.saved_views_enum = enum_value
+        except Exception:
+            pass
+        # Normalize panel enum without reading current value first. Reading an
+        # already-invalid enum can emit RNA warnings before we can fix it.
+        _set_panel_gallery_enum_safe(self, enum_value)
     finally:
         controller.skip_enum_load = prev_skip
 
@@ -996,10 +1070,6 @@ def _handle_saved_view_selection(self, context, enum_value: str, source: str):
 
     # Skip LOADING if we're just syncing the display
     if controller.skip_enum_load:
-        if source == "panel_gallery":
-            debug_tools.inc("enum.panel_gallery.skip_enum_load")
-        else:
-            debug_tools.inc("enum.saved_views.skip_enum_load")
         return
 
     # Handle blank/unselected option
@@ -1008,11 +1078,9 @@ def _handle_saved_view_selection(self, context, enum_value: str, source: str):
         return
 
     if not controller.begin_update(UpdateSource.VIEW_RESTORE, LockPriority.CRITICAL):
-        debug_tools.inc("saved_view.load.blocked_by_controller")
         return
 
     try:
-        debug_tools.inc("saved_view.load.begin")
         with debug_tools.timed("saved_view.load.total"):
             index = int(enum_value)
             # Note: saved_views_index will be set AFTER apply_view_to_viewport
@@ -1064,7 +1132,7 @@ def _handle_saved_view_selection(self, context, enum_value: str, source: str):
                 controller.skip_enum_load = True
                 context.scene.saved_views_index = index
                 context.scene.viewpilot.saved_views_enum = str(index)
-                context.scene.viewpilot.panel_gallery_enum = str(index)
+                _set_panel_gallery_enum_safe(context.scene.viewpilot, str(index))
             finally:
                 controller.skip_enum_load = False
 
@@ -1123,7 +1191,7 @@ def _handle_saved_view_selection(self, context, enum_value: str, source: str):
             self['screen_x'] = 0.0
             self['screen_z'] = 0.0
 
-            debug_tools.inc("saved_view.load.success")
+            pass
     except (ValueError, AttributeError):
         pass
     finally:
@@ -1133,22 +1201,24 @@ def _handle_saved_view_selection(self, context, enum_value: str, source: str):
 
 def update_panel_gallery_enum(self, context):
     """Load the selected view when panel gallery enum changes."""
-    # Handle blank/unselected option
-    if self.panel_gallery_enum == 'NONE':
-        return
-
     controller = get_controller()
     if controller.skip_enum_load:
-        debug_tools.inc("enum.panel_gallery.skip_enum_load")
         return
 
-    debug_tools.inc("enum.panel_gallery.selection_change")
-    _handle_saved_view_selection(self, context, self.panel_gallery_enum, source="panel_gallery")
+    enum_value = self.panel_gallery_enum
+
+    # Handle blank/unselected option
+    if enum_value == 'NONE':
+        return
+
+    _handle_saved_view_selection(self, context, enum_value, source="panel_gallery")
 
 
 def update_saved_views_enum(self, context):
     """Load the selected view when enum changes (for saved_views_enum dropdown)."""
-    debug_tools.inc("enum.saved_views.selection_change")
+    controller = get_controller()
+    if controller.skip_enum_load:
+        return
     _handle_saved_view_selection(self, context, self.saved_views_enum, source="dropdown")
 
 
@@ -1611,9 +1681,9 @@ class ViewPilotProperties(bpy.types.PropertyGroup):
                 if hasattr(context.scene, 'saved_views_index'):
                     idx = context.scene.saved_views_index
                     if idx >= 0:
-                        self.panel_gallery_enum = str(idx)
+                        _set_panel_gallery_enum_safe(self, str(idx))
                     else:
-                        self.panel_gallery_enum = 'NONE'
+                        _set_panel_gallery_enum_safe(self, 'NONE')
                 controller.skip_enum_load = False
             except:
                 if 'controller' in locals():

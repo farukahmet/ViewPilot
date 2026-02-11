@@ -22,8 +22,7 @@ import traceback
 from .temp_paths import make_temp_png_path
 
 
-THUMBNAIL_RENDERER_VERSION = "2026-02-11-write-still-debug6"
-_printed_runtime_marker = False
+THUMBNAIL_RENDERER_VERSION = "2026-02-11-write-still"
 
 
 def _temp_thumbnail_path(image_name):
@@ -32,7 +31,8 @@ def _temp_thumbnail_path(image_name):
 
 
 def _thumb_debug(message):
-    print(f"[ViewPilot][ThumbDebug] {message}")
+    # Kept as a no-op hook for temporary diagnostics when needed.
+    return
 
 
 class ThumbnailRenderer:
@@ -49,13 +49,6 @@ class ThumbnailRenderer:
         Render the viewport with saved view's shading applied.
         saved_view is used to apply shading settings for accurate thumbnails.
         """
-        global _printed_runtime_marker
-        if not _printed_runtime_marker:
-            _thumb_debug(
-                f"renderer={THUMBNAIL_RENDERER_VERSION} module={__file__}"
-            )
-            _printed_runtime_marker = True
-
         area, space, region = self._find_view3d_context(context)
         if not all([area, space, region]):
             print("[ViewPilot] No valid 3D View found for thumbnail rendering")
