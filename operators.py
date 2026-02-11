@@ -923,6 +923,9 @@ class VIEW3D_OT_delete_saved_view(bpy.types.Operator):
         
         # Delete associated thumbnail
         delete_thumbnail(view_name)
+
+        # Capture current active index before deletion so we can remap it.
+        active_before = context.scene.saved_views_index
         
         # Remove the view from JSON storage (auto-syncs to PropertyGroup)
         data_storage.delete_saved_view(index)
@@ -931,15 +934,34 @@ class VIEW3D_OT_delete_saved_view(bpy.types.Operator):
         if VIEW3D_OT_thumbnail_gallery._is_active:
             VIEW3D_OT_thumbnail_gallery.request_refresh()
         
-        # Set scene index to -1 (no selection)
-        context.scene.saved_views_index = -1
-        
-        # Explicitly set the dropdown to blank/unselected via shared prop
+        # Remap active selection to a valid post-delete index.
+        remaining = len(data_storage.get_saved_views())
+        if remaining <= 0:
+            new_active = -1
+        else:
+            # If deleted view was active, select the next valid slot.
+            if active_before == index:
+                new_active = min(index, remaining - 1)
+            # If active was after deleted index, shift left by one.
+            elif active_before > index:
+                new_active = active_before - 1
+            else:
+                new_active = active_before
+            new_active = max(0, min(new_active, remaining - 1))
+
+        # Keep both enums synchronized to a valid identifier to avoid stale
+        # dynamic enum values after index shifts.
         try:
             set_skip_enum_load(True)
-            context.scene.viewpilot.saved_views_enum = 'NONE'
-            set_skip_enum_load(False)
-        except:
+            context.scene.saved_views_index = new_active
+            if new_active >= 0:
+                enum_value = str(new_active)
+                context.scene.viewpilot.saved_views_enum = enum_value
+                context.scene.viewpilot.panel_gallery_enum = enum_value
+            else:
+                context.scene.viewpilot.saved_views_enum = 'NONE'
+                context.scene.viewpilot.panel_gallery_enum = 'NONE'
+        finally:
             set_skip_enum_load(False)
         
         self.report({'INFO'}, f"Deleted view: {view_name}")

@@ -1547,35 +1547,12 @@ class VIEW3D_OT_gallery_delete_view(bpy.types.Operator):
         return context.window_manager.invoke_confirm(self, event)
     
     def execute(self, context):
-        from . import data_storage
-        
-        views = data_storage.get_saved_views()
-        if not (0 <= self.index < len(views)):
-            return {'CANCELLED'}
-        
-        view_name = views[self.index].get("name", "View")
-        
-        # Delete associated thumbnail
-        from .thumbnail_generator import delete_thumbnail
-        delete_thumbnail(view_name)
-        
-        # Remove from JSON storage (auto-syncs to PropertyGroup)
-        data_storage.delete_saved_view(self.index)
-        
-        # Reset selection
-        context.scene.saved_views_index = -1
-        
-        # Refresh gallery
-        if VIEW3D_OT_thumbnail_gallery._is_active:
-            VIEW3D_OT_thumbnail_gallery.request_refresh()
-        
-        self.report({'INFO'}, f"Deleted view: {view_name}")
-        
-        # Clean up World fake users that may no longer be needed
-        from . import utils
-        utils.cleanup_world_fake_users()
-        
-        return {'FINISHED'}
+        # Delegate to the canonical delete operator so index remapping and enum
+        # synchronization logic stay consistent across all delete entry points.
+        result = bpy.ops.view3d.delete_saved_view(index=self.index)
+        if 'FINISHED' in result:
+            return {'FINISHED'}
+        return {'CANCELLED'}
 
 
 class VIEW3D_OT_gallery_view_to_camera(bpy.types.Operator):
