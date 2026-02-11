@@ -1059,7 +1059,7 @@ def _sync_saved_view_selection_enums(self, controller, enum_value: str):
         controller.skip_enum_load = prev_skip
 
 
-def _handle_saved_view_selection(self, context, enum_value: str, source: str):
+def _handle_saved_view_selection(self, context, enum_value: str):
     """Shared handler for selecting/loading a saved view from any UI source."""
     from . import data_storage
 
@@ -1190,8 +1190,6 @@ def _handle_saved_view_selection(self, context, enum_value: str, source: str):
 
             self['screen_x'] = 0.0
             self['screen_z'] = 0.0
-
-            pass
     except (ValueError, AttributeError):
         pass
     finally:
@@ -1211,7 +1209,7 @@ def update_panel_gallery_enum(self, context):
     if enum_value == 'NONE':
         return
 
-    _handle_saved_view_selection(self, context, enum_value, source="panel_gallery")
+    _handle_saved_view_selection(self, context, enum_value)
 
 
 def update_saved_views_enum(self, context):
@@ -1219,7 +1217,7 @@ def update_saved_views_enum(self, context):
     controller = get_controller()
     if controller.skip_enum_load:
         return
-    _handle_saved_view_selection(self, context, self.saved_views_enum, source="dropdown")
+    _handle_saved_view_selection(self, context, self.saved_views_enum)
 
 
 # ============================================================================

@@ -722,58 +722,12 @@ def set_skip_enum_load(value):
 
 
 def _set_panel_gallery_enum_safe(context, preferred_value=None):
-    """Set panel_gallery_enum with a runtime-valid identifier."""
-    controller = get_controller()
-    prev_skip = controller.skip_enum_load
-
-    props = context.scene.viewpilot
-    seen = set()
-    candidates = []
-
-    if preferred_value is not None:
-        candidates.append(str(preferred_value))
-
+    """Delegate to the canonical enum-safe setter in properties.py."""
     try:
-        view_count = len(context.scene.saved_views)
+        from .properties import _set_panel_gallery_enum_safe as _set_safe
+        return _set_safe(context.scene.viewpilot, preferred_value)
     except Exception:
-        view_count = 0
-
-    try:
-        current_idx = int(context.scene.saved_views_index)
-    except Exception:
-        current_idx = -1
-
-    if view_count > 0:
-        valid_ids = {str(i) for i in range(view_count)}
-    else:
-        valid_ids = {"NONE"}
-
-    if view_count > 0:
-        if 0 <= current_idx < view_count:
-            candidates.append(str(current_idx))
-        if 0 <= getattr(props, "last_active_view_index", -1) < view_count:
-            candidates.append(str(props.last_active_view_index))
-        candidates.append("0")
-        candidates.append(str(view_count - 1))
-
-    candidates.append("NONE")
-
-    try:
-        controller.skip_enum_load = True
-        for candidate in candidates:
-            if candidate in seen:
-                continue
-            seen.add(candidate)
-            if candidate not in valid_ids:
-                continue
-            try:
-                props.panel_gallery_enum = candidate
-                return True
-            except Exception:
-                continue
         return False
-    finally:
-        controller.skip_enum_load = prev_skip
 
 
 def _sync_saved_view_enums_safe(context, enum_value):
@@ -784,14 +738,6 @@ def _sync_saved_view_enums_safe(context, enum_value):
     except Exception:
         pass
     _set_panel_gallery_enum_safe(context, enum_value)
-
-
-def _push_undo_step(message):
-    """Explicitly push an undo step when called from nested operator chains."""
-    try:
-        bpy.ops.ed.undo_push(message=message)
-    except Exception:
-        pass
 
 
 class VIEW3D_OT_save_current_view(bpy.types.Operator):
@@ -919,7 +865,6 @@ class VIEW3D_OT_save_current_view(bpy.types.Operator):
              set_skip_enum_load(False)
         
         self.report({'INFO'}, f"Saved view: {view_name}")
-        _push_undo_step("ViewPilot Save View")
         return {'FINISHED'}
 
 
@@ -1060,7 +1005,6 @@ class VIEW3D_OT_delete_saved_view(bpy.types.Operator):
         
         # Clean up World fake users that may no longer be needed
         utils.cleanup_world_fake_users()
-        _push_undo_step("ViewPilot Delete View")
         
         return {'FINISHED'}
 

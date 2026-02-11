@@ -30,11 +30,6 @@ def _temp_thumbnail_path(image_name):
     return make_temp_png_path("_vp_thumb_", image_name)
 
 
-def _thumb_debug(message):
-    # Kept as a no-op hook for temporary diagnostics when needed.
-    return
-
-
 class ThumbnailRenderer:
     """
     Renders thumbnails using bpy.ops.render.opengl.
@@ -213,42 +208,29 @@ class ThumbnailRenderer:
             context.scene.render.resolution_percentage = 100
             context.scene.render.filepath = temp_base
             image_settings = context.scene.render.image_settings
-            _thumb_debug(
-                "before force: "
-                f"media_type={getattr(image_settings, 'media_type', '<n/a>')} "
-                f"file_format={getattr(image_settings, 'file_format', '<n/a>')} "
-                f"color_mode={getattr(image_settings, 'color_mode', '<n/a>')} "
-                f"color_depth={getattr(image_settings, 'color_depth', '<n/a>')} "
-                f"color_management={getattr(image_settings, 'color_management', '<n/a>')} "
-                f"linear_colorspace={getattr(getattr(image_settings, 'linear_colorspace_settings', None), 'name', '<n/a>')} "
-                f"override_view_transform={getattr(getattr(image_settings, 'view_settings', None), 'view_transform', '<n/a>')} "
-                f"override_look={getattr(getattr(image_settings, 'view_settings', None), 'look', '<n/a>')} "
-                f"use_multiview={getattr(context.scene.render, 'use_multiview', '<n/a>')} "
-                f"views_format={getattr(context.scene.render, 'views_format', '<n/a>')}"
-            )
 
             # Force output context suitable for thumbnail files.
             if hasattr(context.scene.render, "use_multiview"):
                 try:
                     context.scene.render.use_multiview = False
-                except Exception as e_mv:
-                    _thumb_debug(f"set use_multiview=False failed: {e_mv}")
+                except Exception:
+                    pass
 
             if hasattr(context.scene.render, "views_format"):
                 views_ids = self._enum_ids(context.scene.render, "views_format")
                 if "INDIVIDUAL" in views_ids:
                     try:
                         context.scene.render.views_format = "INDIVIDUAL"
-                    except Exception as e_vf:
-                        _thumb_debug(f"set views_format=INDIVIDUAL failed: {e_vf}")
+                    except Exception:
+                        pass
 
             if hasattr(image_settings, "media_type"):
                 media_ids = self._enum_ids(image_settings, "media_type")
                 if "IMAGE" in media_ids:
                     try:
                         image_settings.media_type = "IMAGE"
-                    except Exception as e_mt:
-                        _thumb_debug(f"set media_type=IMAGE failed: {e_mt}")
+                    except Exception:
+                        pass
 
             # Avoid output-level color-management override affecting thumbnail
             # tonemapping during OpenGL file write. We want scene-driven output.
@@ -256,8 +238,8 @@ class ThumbnailRenderer:
             if "FOLLOW_SCENE" in color_mgmt_ids:
                 try:
                     image_settings.color_management = "FOLLOW_SCENE"
-                except Exception as e_cmgt:
-                    _thumb_debug(f"set color_management=FOLLOW_SCENE failed: {e_cmgt}")
+                except Exception:
+                    pass
 
             format_ids = self._enum_ids(image_settings, "file_format")
             if "PNG" not in format_ids:
@@ -273,20 +255,6 @@ class ThumbnailRenderer:
                 raise TypeError(f"Neither RGBA nor RGB available in color_mode enum: {sorted(color_ids)}")
 
             output_filepath = bpy.path.ensure_ext(temp_base, context.scene.render.file_extension)
-            _thumb_debug(
-                "before opengl: "
-                f"media_type={getattr(image_settings, 'media_type', '<n/a>')} "
-                f"file_format={getattr(image_settings, 'file_format', '<n/a>')} "
-                f"color_mode={getattr(image_settings, 'color_mode', '<n/a>')} "
-                f"color_depth={getattr(image_settings, 'color_depth', '<n/a>')} "
-                f"color_management={getattr(image_settings, 'color_management', '<n/a>')} "
-                f"linear_colorspace={getattr(getattr(image_settings, 'linear_colorspace_settings', None), 'name', '<n/a>')} "
-                f"override_view_transform={getattr(getattr(image_settings, 'view_settings', None), 'view_transform', '<n/a>')} "
-                f"override_look={getattr(getattr(image_settings, 'view_settings', None), 'look', '<n/a>')} "
-                f"use_multiview={getattr(context.scene.render, 'use_multiview', '<n/a>')} "
-                f"views_format={getattr(context.scene.render, 'views_format', '<n/a>')} "
-                f"filepath={context.scene.render.filepath}"
-            )
             
             # COLOR MANAGEMENT FOR THUMBNAILS
             # ================================
@@ -363,7 +331,6 @@ class ThumbnailRenderer:
                     if matches:
                         output_filepath = matches[0]
 
-            _thumb_debug(f"opengl write_still output -> {output_filepath}")
             if not os.path.exists(output_filepath):
                 print(f"[ViewPilot] OpenGL thumbnail output missing: {output_filepath}")
                 return None
@@ -490,15 +457,15 @@ class ThumbnailRenderer:
             if orig_use_multiview is not None and hasattr(context.scene.render, "use_multiview"):
                 try:
                     context.scene.render.use_multiview = orig_use_multiview
-                except Exception as e_mv:
-                    _thumb_debug(f"restore use_multiview={orig_use_multiview} failed: {e_mv}")
+                except Exception:
+                    pass
             if orig_views_format is not None and hasattr(context.scene.render, "views_format"):
                 views_ids = self._enum_ids(context.scene.render, "views_format")
                 if orig_views_format in views_ids:
                     try:
                         context.scene.render.views_format = orig_views_format
-                    except Exception as e_vf:
-                        _thumb_debug(f"restore views_format={orig_views_format} failed: {e_vf}")
+                    except Exception:
+                        pass
             image_settings = context.scene.render.image_settings
             self._restore_rna_scalars(
                 image_settings,
@@ -554,27 +521,8 @@ class ThumbnailRenderer:
             if orig_linear_colorspace and hasattr(image_settings, "linear_colorspace_settings"):
                 try:
                     image_settings.linear_colorspace_settings.name = orig_linear_colorspace
-                except Exception as e_lcs:
-                    _thumb_debug(
-                        f"restore linear_colorspace_settings.name={orig_linear_colorspace} failed: {e_lcs}"
-                    )
-            try:
-                image_settings = context.scene.render.image_settings
-                _thumb_debug(
-                    "after restore: "
-                    f"media_type={getattr(image_settings, 'media_type', '<n/a>')} "
-                    f"file_format={getattr(image_settings, 'file_format', '<n/a>')} "
-                    f"color_mode={getattr(image_settings, 'color_mode', '<n/a>')} "
-                    f"color_depth={getattr(image_settings, 'color_depth', '<n/a>')} "
-                    f"color_management={getattr(image_settings, 'color_management', '<n/a>')} "
-                    f"linear_colorspace={getattr(getattr(image_settings, 'linear_colorspace_settings', None), 'name', '<n/a>')} "
-                    f"override_view_transform={getattr(getattr(image_settings, 'view_settings', None), 'view_transform', '<n/a>')} "
-                    f"override_look={getattr(getattr(image_settings, 'view_settings', None), 'look', '<n/a>')} "
-                    f"use_multiview={getattr(context.scene.render, 'use_multiview', '<n/a>')} "
-                    f"views_format={getattr(context.scene.render, 'views_format', '<n/a>')}"
-                )
-            except Exception:
-                pass
+                except Exception:
+                    pass
             
             # Cleanup temp file
             try:
@@ -638,11 +586,8 @@ class ThumbnailRenderer:
         try:
             setattr(rna_owner, prop_name, value)
             return
-        except Exception as e:
-            enum_ids = self._enum_ids(rna_owner, prop_name)
-            _thumb_debug(
-                f"{debug_prefix} failed: value={value} available={sorted(enum_ids)} err={e}"
-            )
+        except Exception:
+            return
 
     def _restore_rna_scalars(self, rna_owner, state, debug_prefix="", priority=()):
         """Restore scalar RNA state with dependency-aware ordering."""
@@ -669,9 +614,7 @@ class ThumbnailRenderer:
                 break
 
         if pending:
-            _thumb_debug(
-                f"{debug_prefix} unresolved: {sorted(pending.keys())}"
-            )
+            return
 
     def _snapshot_curve_mapping(self, view_settings):
         """Snapshot color-management curve mapping points for later restoration."""
@@ -728,8 +671,8 @@ class ThumbnailRenderer:
                 cm.update()
             except Exception:
                 pass
-        except Exception as e:
-            _thumb_debug(f"{debug_prefix} failed: {e}")
+        except Exception:
+            pass
     
     def _find_view3d_context(self, context):
         """Find a valid VIEW_3D area, space, and WINDOW region.
