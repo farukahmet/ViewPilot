@@ -11,7 +11,7 @@ from .state_controller import get_controller, UpdateSource, LockPriority
 from . import debug_tools
 from .utils import (
     get_view_location, set_view_location, add_to_history,
-    get_selection_center, find_view3d_context,
+    get_selection_center, get_orbit_focus_selection, get_orbit_focus_view_layer_objects, find_view3d_context,
     find_view3d_override_context, find_window_for_area
 )
 
@@ -129,6 +129,11 @@ def update_screen_rotation(self, context):
         # Start grace period during drag
         controller.start_grace_period(0.2)
 
+        # Orbit initialization runs asynchronously after framing.
+        # Ignore lens/scale edits until orbit state is ready to avoid stale-value jumps.
+        if self.orbit_around_selection and not self.orbit_initialized:
+            return
+
         if context.space_data.type == 'VIEW_3D':
             # Calculate new rotation by adding screen rotation to base rotation
             base_rot = Euler((self.base_rotation[0], self.base_rotation[1], self.base_rotation[2]), 'XYZ')
@@ -176,6 +181,8 @@ def update_orbit_mode_toggle(self, context):
             
             # Check if we're in camera mode
             in_camera_mode = self.is_camera_mode and context.scene.camera
+            orbit_targets = get_orbit_focus_selection(context)
+            frame_targets = orbit_targets if orbit_targets else get_orbit_focus_view_layer_objects(context)
             
             # 1. Find the 3D View area and WINDOW region for proper override context.
             target_area, _, target_region = find_view3d_override_context(context)
@@ -195,10 +202,51 @@ def update_orbit_mode_toggle(self, context):
                         override_kwargs = {"area": target_area, "region": target_region}
                         if target_window:
                             override_kwargs["window"] = target_window
-                        with bpy.context.temp_override(**override_kwargs):
-                            if bpy.context.selected_objects:
-                                bpy.ops.view3d.view_selected('INVOKE_DEFAULT')
-                            else:
+                        if frame_targets:
+                            # Temporarily isolate framing selection so cameras/lights/empties
+                            # don't influence orbit focus.
+                            selected_before = list(context.selected_objects)
+                            active_before = context.view_layer.objects.active
+                            try:
+                                for obj in selected_before:
+                                    try:
+                                        obj.select_set(False)
+                                    except Exception:
+                                        pass
+                                for obj in frame_targets:
+                                    try:
+                                        obj.select_set(True)
+                                    except Exception:
+                                        pass
+                                try:
+                                    if active_before in frame_targets:
+                                        context.view_layer.objects.active = active_before
+                                    else:
+                                        context.view_layer.objects.active = frame_targets[0]
+                                except Exception:
+                                    pass
+
+                                with bpy.context.temp_override(**override_kwargs):
+                                    bpy.ops.view3d.view_selected('INVOKE_DEFAULT')
+                            finally:
+                                for obj in frame_targets:
+                                    if obj not in selected_before:
+                                        try:
+                                            obj.select_set(False)
+                                        except Exception:
+                                            pass
+                                for obj in selected_before:
+                                    try:
+                                        obj.select_set(True)
+                                    except Exception:
+                                        pass
+                                try:
+                                    context.view_layer.objects.active = active_before
+                                except Exception:
+                                    pass
+                        else:
+                            # Fallback: no geometry/instancer objects available to frame.
+                            with bpy.context.temp_override(**override_kwargs):
                                 bpy.ops.view3d.view_all('INVOKE_DEFAULT')
                     except Exception as e:
                         print(f"[ViewPilot] Framing failed: {e}")
@@ -236,6 +284,9 @@ def update_orbit_mode_toggle(self, context):
                         eye_pos = cam.location.copy()
                         rot = cam.rotation_euler.to_quaternion()
                         dist = 10.0  # Doesn't matter for camera mode, we use actual position
+                        if cam.data.type == 'ORTHO':
+                            # Keep UI ortho scale synchronized after orbit framing.
+                            props['focal_length'] = cam.data.ortho_scale
                         
                         # Get stored center
                         stored_center = Vector(props.orbit_center)
@@ -263,6 +314,11 @@ def update_orbit_mode_toggle(self, context):
                         rot = region_3d.view_rotation
                         view_z = Vector((0.0, 0.0, 1.0))
                         dist = region_3d.view_distance
+                        if not region_3d.is_perspective:
+                            # Sync the ortho scale slider to the framed viewport
+                            # distance so first user drag does not jump.
+                            props['focal_length'] = dist
+                            props['base_view_distance'] = dist
                         eye_pos = region_3d.view_location + (rot @ view_z) * dist
                         
                         # Get stored center
@@ -714,7 +770,22 @@ def update_lens_clip(self, context):
                 if region.is_perspective:
                     context.space_data.lens = self.focal_length
                 else:
+                    pre_eye = get_view_location(context)
+                    pre_rot = region.view_rotation.copy()
+                    orbit_eye = None
+                    if self.orbit_around_selection and self.orbit_initialized:
+                        orbit_center = Vector(self.orbit_center)
+                        orbit_offset = pre_eye - orbit_center
+                        orbit_eye = orbit_center + orbit_offset
+
                     region.view_distance = self.focal_length
+
+                    # In orthographic orbit mode, keep the current orbit eye/offset stable
+                    # while changing scale to avoid apparent "jump" when slider is touched.
+                    if orbit_eye is not None:
+                        view_z = pre_rot @ Vector((0.0, 0.0, 1.0))
+                        region.view_location = orbit_eye - (view_z * region.view_distance)
+
                     safe_dist = max(0.001, self.focal_length)
                     self['zoom_level'] = 10.0 / safe_dist
                     current_eye = get_view_location(context)
@@ -920,7 +991,7 @@ def get_saved_views_items(self, context):
                     last_view_name = saved_views[last_idx].get("name", "View")
                     # Safely format with asterisks (Unicode-safe)
                     none_label = f"*{last_view_name}*"
-            except:
+            except Exception:
                 pass
 
     try:
@@ -1479,7 +1550,7 @@ class ViewPilotProperties(bpy.types.PropertyGroup):
         try:
             from .preview_manager import get_panel_gallery_items
             return get_panel_gallery_items(self, context)
-        except:
+        except Exception:
             return [('NONE', "No Views", "", 0, 0)]
     
     panel_gallery_enum: bpy.props.EnumProperty(
@@ -1695,7 +1766,7 @@ class ViewPilotProperties(bpy.types.PropertyGroup):
                     else:
                         _set_panel_gallery_enum_safe(self, 'NONE')
                 controller.skip_enum_load = False
-            except:
+            except Exception:
                 if 'controller' in locals():
                     controller.skip_enum_load = False
             
@@ -1737,7 +1808,7 @@ class ViewPilotProperties(bpy.types.PropertyGroup):
                 try:
                     from .preferences import get_preferences
                     self.use_fov = get_preferences().default_lens_unit == 'FOV'
-                except:
+                except Exception:
                     self.use_fov = True  # Default to FOV
                 
                 if self.is_perspective:

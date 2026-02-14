@@ -37,7 +37,7 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
         try:
             from .preferences import get_preferences
             return get_preferences().thumbnail_size_max
-        except:
+        except Exception:
             return cls.THUMB_SIZE_MAX_DEFAULT
     
     _draw_handler = None
@@ -801,7 +801,7 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
                             # Clean up temp file
                             try:
                                 os.remove(temp_path)
-                            except:
+                            except Exception:
                                 pass
                             
                     except Exception as e:
@@ -1176,7 +1176,7 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
             # Clamp to minimum 0.2 (slider shows 0-1 for visual alignment with other sliders)
             size_factor = max(0.2, prefs.preview_size_factor)
             backdrop_opacity = prefs.preview_backdrop_opacity
-        except:
+        except Exception:
             size_factor = 0.5
             backdrop_opacity = 0.5
         
@@ -1407,7 +1407,7 @@ def _reset_gallery_state():
     if _backup_draw_handler is not None:
         try:
             bpy.types.SpaceView3D.draw_handler_remove(_backup_draw_handler, 'WINDOW')
-        except:
+        except Exception:
             pass
         _backup_draw_handler = None
     
@@ -1418,10 +1418,10 @@ def _reset_gallery_state():
                 bpy.types.SpaceView3D.draw_handler_remove(
                     VIEW3D_OT_thumbnail_gallery._draw_handler, 'WINDOW'
                 )
-            except:
+            except Exception:
                 pass
             VIEW3D_OT_thumbnail_gallery._draw_handler = None
-    except:
+    except Exception:
         pass
     
     # Reset all class-level state
@@ -1440,7 +1440,7 @@ def _reset_gallery_state():
         VIEW3D_OT_thumbnail_gallery._context_area = None
         VIEW3D_OT_thumbnail_gallery._context_menu_index = -1
         VIEW3D_OT_thumbnail_gallery._textures.clear()
-    except:
+    except Exception:
         pass
 
     # Clean up any stale temp display images.
@@ -1457,7 +1457,7 @@ def _reset_gallery_state():
             for area in window.screen.areas:
                 if area.type == 'VIEW_3D':
                     area.tag_redraw()
-    except:
+    except Exception:
         pass
 
 
@@ -1486,7 +1486,7 @@ def _on_load_post(dummy):
         from .preferences import get_preferences
         if not get_preferences().start_gallery_on_load:
             return
-    except:
+    except Exception:
         return  # Don't auto-start if we can't read preference (safer default)
     # Auto-enable gallery after a short delay to ensure context is ready
     bpy.app.timers.register(_auto_start_gallery, first_interval=0.5)
@@ -1669,7 +1669,7 @@ class VIEW3D_OT_gallery_view_to_camera(bpy.types.Operator):
             collection_name = prefs.camera_collection_name
             collection_color = prefs.camera_collection_color
             camera_name_prefix = prefs.camera_name_prefix
-        except:
+        except Exception:
             passepartout = 0.95
             show_passepartout = True
             show_name = True
@@ -1733,7 +1733,7 @@ def register():
         from .preferences import get_preferences
         if get_preferences().start_gallery_on_load:
             bpy.app.timers.register(_auto_start_gallery, first_interval=0.5)
-    except:
+    except Exception:
         pass
 
 

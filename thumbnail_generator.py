@@ -523,7 +523,7 @@ class ThumbnailRenderer:
                     os.remove(output_filepath)
                 if os.path.exists(temp_filepath) and temp_filepath != output_filepath:
                     os.remove(temp_filepath)
-            except:
+            except Exception:
                 pass
 
     def _enum_ids(self, rna_owner, prop_name):
@@ -764,5 +764,5 @@ def delete_thumbnail(view_name):
     try:
         from .preview_manager import remove_view_preview
         remove_view_preview(view_name)
-    except:
+    except Exception:
         pass

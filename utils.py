@@ -226,10 +226,67 @@ def set_view_location(context, target_pos, target_rot_euler):
     region.view_location = target_pos - offset
 
 
+_ORBIT_FOCUS_TYPES = {
+    'MESH',
+    'CURVE',
+    'CURVES',
+    'SURFACE',
+    'FONT',
+    'META',
+    'VOLUME',
+    'POINTCLOUD',
+    'GREASEPENCIL',
+    'GPENCIL',
+}
+
+
+def _is_orbit_focus_object(obj):
+    """Return True when object should contribute to orbit-selection focus."""
+    if not obj:
+        return False
+    if obj.type in _ORBIT_FOCUS_TYPES:
+        return True
+
+    # Include instancers (for example Empty instancing a Collection).
+    instance_type = getattr(obj, "instance_type", 'NONE')
+    if instance_type and instance_type != 'NONE':
+        if instance_type == 'COLLECTION':
+            return bool(getattr(obj, "instance_collection", None))
+        return True
+    if getattr(obj, "is_instancer", False):
+        return True
+    return False
+
+
+def get_orbit_focus_selection(context):
+    """Get selected objects that should affect orbit-selection mode."""
+    selected = getattr(context, "selected_objects", None) or []
+    return [obj for obj in selected if _is_orbit_focus_object(obj)]
+
+
+def get_orbit_focus_view_layer_objects(context):
+    """Get visible geometry/instancer objects from the current view layer."""
+    view_layer = getattr(context, "view_layer", None) or getattr(bpy.context, "view_layer", None)
+    if not view_layer:
+        return []
+
+    objects = []
+    for obj in view_layer.objects:
+        if not _is_orbit_focus_object(obj):
+            continue
+        try:
+            if not obj.visible_get(view_layer=view_layer):
+                continue
+        except Exception:
+            if getattr(obj, "hide_viewport", False):
+                continue
+        objects.append(obj)
+    return objects
+
+
 def get_selection_center(context):
-    """Get the bounding box center of selected non-camera objects."""
-    # Filter cameras to avoid skewing center with camera objects
-    selected = [obj for obj in context.selected_objects if obj.type != 'CAMERA']
+    """Get bounding box center of selected geometry/instancer objects."""
+    selected = get_orbit_focus_selection(context)
     if not selected:
         return None
     
@@ -548,7 +605,7 @@ def add_to_history(state):
     try:
         from .preferences import get_preferences
         max_size = get_preferences().history_max_size
-    except:
+    except Exception:
         max_size = 20
     if len(view_history) > max_size:
         view_history.pop(0)
@@ -716,6 +773,6 @@ def start_monitor():
         return None  # Already running
     try:
         bpy.ops.view3d.view_history_monitor('INVOKE_DEFAULT')
-    except:
+    except Exception:
         pass
     return None

@@ -410,7 +410,7 @@ def on_file_load(dummy):
             if context and hasattr(context, 'scene') and context.scene:
                 reload_all_previews(context)
                 _request_gallery_refresh()
-        except:
+        except Exception:
             pass
         finally:
             _mark_saved_views_signature()
