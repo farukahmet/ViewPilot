@@ -12,6 +12,7 @@ import gpu
 from gpu_extras.batch import batch_for_shader
 from mathutils import Vector, Quaternion
 from .temp_paths import make_temp_png_path
+from . import debug_tools
 
 # Module-level backup of draw handler - survives class reload
 _backup_draw_handler = None
@@ -119,6 +120,13 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
         self._close_hover = False
         self._flip_to_top = False  # User preference to flip gallery to top
         self._preview_index = -1  # Index of thumbnail being previewed with MMB
+        self._layout_cache = None
+        self._layout_cache_key = None
+        self._geom_cache = {}
+        self._text_dim_cache = {}
+        self._display_image_names = set()
+        self._shader_uniform = gpu.shader.from_builtin('UNIFORM_COLOR')
+        self._shader_image = gpu.shader.from_builtin('IMAGE')
         
         # Load textures for all thumbnails
         self._load_textures(context)
@@ -146,6 +154,130 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
             if cls._primary_area:
                 cls._primary_area.tag_redraw()
             return
+
+    def _invalidate_layout_cache(self, clear_text_cache=False):
+        """Invalidate cached gallery layout and geometry."""
+        self._layout_cache = None
+        self._layout_cache_key = None
+        self._geom_cache.clear()
+        if clear_text_cache:
+            self._text_dim_cache.clear()
+
+    def _clear_gpu_textures(self):
+        """Release GPU texture objects held by the gallery instance."""
+        for tex in list(self._textures.values()):
+            free_fn = getattr(tex, "free", None)
+            if callable(free_fn):
+                try:
+                    free_fn()
+                except Exception:
+                    pass
+        self._textures.clear()
+
+    def _clear_display_images(self):
+        """Remove temporary display images created for Blender 4.x preview path."""
+        for name in list(self._display_image_names):
+            img = bpy.data.images.get(name)
+            if img:
+                try:
+                    bpy.data.images.remove(img)
+                except Exception:
+                    pass
+        self._display_image_names.clear()
+
+    def _batch_key(self, kind, x, y, width, height):
+        return (kind, int(round(x)), int(round(y)), int(round(width)), int(round(height)))
+
+    def _get_rect_batch(self, kind, x, y, width, height):
+        """Return cached GPU batch for common rectangle primitives."""
+        key = self._batch_key(kind, x, y, width, height)
+        batch = self._geom_cache.get(key)
+        if batch is not None:
+            return batch
+
+        if kind == 'TRIS':
+            verts = (
+                (x, y), (x + width, y),
+                (x + width, y + height), (x, y + height),
+            )
+            batch = batch_for_shader(
+                self._shader_uniform, 'TRIS', {"pos": verts},
+                indices=((0, 1, 2), (2, 3, 0))
+            )
+        elif kind == 'LINE':
+            verts = (
+                (x, y), (x + width, y),
+                (x + width, y + height), (x, y + height), (x, y),
+            )
+            batch = batch_for_shader(self._shader_uniform, 'LINE_STRIP', {"pos": verts})
+        elif kind == 'IMAGE':
+            verts = (
+                (x, y), (x + width, y),
+                (x + width, y + height), (x, y + height),
+            )
+            uvs = ((0, 0), (1, 0), (1, 1), (0, 1))
+            batch = batch_for_shader(
+                self._shader_image, 'TRIS',
+                {"pos": verts, "texCoord": uvs},
+                indices=((0, 1, 2), (2, 3, 0))
+            )
+        else:
+            return None
+
+        self._geom_cache[key] = batch
+        return batch
+
+    def _get_dashed_border_batch(self, x, y, width, height):
+        """Return cached batch for dashed borders."""
+        import math
+
+        key = self._batch_key('DASHED', x, y, width, height)
+        batch = self._geom_cache.get(key)
+        if batch is not None:
+            return batch
+
+        vertices = []
+        dash_len = 10
+        gap_len = 6
+
+        def add_dashed_line(x1, y1, x2, y2):
+            dx = x2 - x1
+            dy = y2 - y1
+            dist = math.sqrt(dx * dx + dy * dy)
+            if dist == 0:
+                return
+
+            steps = int(dist / (dash_len + gap_len))
+            ux = dx / dist
+            uy = dy / dist
+
+            for i in range(steps + 1):
+                start_dist = i * (dash_len + gap_len)
+                if start_dist >= dist:
+                    break
+                end_dist = min(dist, start_dist + dash_len)
+                vertices.append((x1 + ux * start_dist, y1 + uy * start_dist))
+                vertices.append((x1 + ux * end_dist, y1 + uy * end_dist))
+
+        add_dashed_line(x, y + height, x + width, y + height)      # Top
+        add_dashed_line(x, y, x + width, y)                        # Bottom
+        add_dashed_line(x, y, x, y + height)                       # Left
+        add_dashed_line(x + width, y, x + width, y + height)       # Right
+
+        batch = batch_for_shader(self._shader_uniform, 'LINES', {"pos": vertices})
+        self._geom_cache[key] = batch
+        return batch
+
+    def _get_text_dimensions(self, font_id, font_size, text):
+        """Return cached BLF text dimensions."""
+        key = (font_id, int(font_size), text)
+        dims = self._text_dim_cache.get(key)
+        if dims is not None:
+            return dims
+        blf.size(font_id, int(font_size))
+        dims = blf.dimensions(font_id, text)
+        self._text_dim_cache[key] = dims
+        return dims
     
     def modal(self, context, event):
         # Check if we should stop (toggled off externally or by addon reload)
@@ -353,6 +485,7 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
                         self._scroll_offset = max(0, self._scroll_offset - 1)
                     else:
                         self._scroll_offset = min(max_offset, self._scroll_offset + 1)
+                    self._invalidate_layout_cache()
                     context.area.tag_redraw()
                     return {'RUNNING_MODAL'}
             return {'PASS_THROUGH'}
@@ -410,13 +543,11 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
             bpy.types.SpaceView3D.draw_handler_remove(self._draw_handler, 'WINDOW')
             self._draw_handler = None
         _backup_draw_handler = None  # Clear module-level backup
-        self._textures.clear()
-        
-        # Clean up temp display images (only created in Blender 4.x save_render path)
-        if bpy.app.version < (5, 0, 0):
-            for img in list(bpy.data.images):
-                if img.name.startswith(".VP_Display_"):
-                    bpy.data.images.remove(img)
+        self._clear_gpu_textures()
+        self._clear_display_images()
+        self._invalidate_layout_cache(clear_text_cache=True)
+        self._shader_uniform = None
+        self._shader_image = None
         
         # Redraw all 3D views
         for area in context.screen.areas:
@@ -629,17 +760,14 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
         - Blender 4.x: Use save_render() workaround to fix washed-out colors
         """
         from . import data_storage
-        
-        self._textures.clear()
+        self._clear_gpu_textures()
+        self._invalidate_layout_cache()
         
         # Check Blender version - 5.0+ handles Non-Color correctly in GPU textures
         use_direct_method = bpy.app.version >= (5, 0, 0)
         
-        if not use_direct_method:
-            # Clean up any previous temp display images (only needed for save_render path)
-            for img in list(bpy.data.images):
-                if img.name.startswith(".VP_Display_"):
-                    bpy.data.images.remove(img)
+        # Clean up previously generated display images before rebuilding textures.
+        self._clear_display_images()
         
         views = data_storage.get_saved_views()
         for i, view_dict in enumerate(views):
@@ -669,6 +797,7 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
                             else:
                                 display_img = bpy.data.images.load(temp_path, check_existing=False)
                                 display_img.name = display_img_name
+                            self._display_image_names.add(display_img_name)
                             
                             texture = gpu.texture.from_image(display_img)
                             self._textures[i] = texture
@@ -727,41 +856,59 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
         region = VIEW3D_OT_thumbnail_gallery._primary_region or context.region
         if region is None:
             return None
-            
+
         num_views = len(data_storage.get_saved_views())
-        
-        # Calculate adaptive thumbnail size
-        thumb_size = self._calculate_thumb_size(context, num_views)
-        
-        # Calculate visible range
-        visible_count = self._get_visible_count(context)
-        needs_scroll = num_views > visible_count
-        
-        # Clamp scroll offset
-        max_offset = max(0, num_views - visible_count)
-        scroll_offset = min(self._scroll_offset, max_offset)
-        self._scroll_offset = scroll_offset # Ensure persisted
-        
-        start_idx = scroll_offset if needs_scroll else 0
-        end_idx = min(num_views, start_idx + visible_count)
-        visible_views = end_idx - start_idx
-        
-        thumb_spacing = thumb_size + self.THUMB_PADDING
-        total_content_width = (visible_views * thumb_spacing) + thumb_spacing
-        
-        start_x = (region.width - total_content_width + self.THUMB_PADDING) / 2
-        
+        thumb_size_max = self._get_thumb_size_max()
+
         # Detect header position and calculate Y offset
         header_height = 0
         header_at_bottom = True  # Default assumption
-        if context.area:
-            for ar in context.area.regions:
+        area = VIEW3D_OT_thumbnail_gallery._primary_area or context.area
+        if area:
+            for ar in area.regions:
                 if ar.type == 'HEADER':
                     header_height = ar.height
                     # Check alignment property - 'BOTTOM' means header is at bottom
                     header_at_bottom = (ar.alignment == 'BOTTOM')
                     break
-        
+
+        layout_key = (
+            region.width,
+            region.height,
+            num_views,
+            self._scroll_offset,
+            self._flip_to_top,
+            header_height,
+            header_at_bottom,
+            thumb_size_max,
+        )
+        if self._layout_cache_key == layout_key and self._layout_cache is not None:
+            debug_tools.inc("modal.layout.cache_hit")
+            return self._layout_cache
+
+        debug_tools.inc("modal.layout.recompute")
+
+        # Calculate adaptive thumbnail size
+        thumb_size = self._calculate_thumb_size(context, num_views)
+
+        # Calculate visible range
+        visible_count = self._get_visible_count(context)
+        needs_scroll = num_views > visible_count
+
+        # Clamp scroll offset
+        max_offset = max(0, num_views - visible_count)
+        scroll_offset = min(self._scroll_offset, max_offset)
+        self._scroll_offset = scroll_offset  # Ensure persisted
+
+        start_idx = scroll_offset if needs_scroll else 0
+        end_idx = min(num_views, start_idx + visible_count)
+        visible_views = end_idx - start_idx
+
+        thumb_spacing = thumb_size + self.THUMB_PADDING
+        total_content_width = (visible_views * thumb_spacing) + thumb_spacing
+
+        start_x = (region.width - total_content_width + self.THUMB_PADDING) / 2
+
         # Calculate Y position based on gallery position and header alignment
         if self._flip_to_top:
             # Gallery at top - offset down if header is also at top
@@ -777,16 +924,21 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
             else:
                 # Header at top, no offset needed
                 start_y = self.STRIP_MARGIN
-        
-        return {
+
+        layout = {
             'thumb_size': thumb_size,
             'start_idx': start_idx,
             'end_idx': end_idx,
             'start_x': start_x,
             'start_y': start_y,
             'visible_views': visible_views,
-            'thumb_spacing': thumb_spacing
+            'thumb_spacing': thumb_spacing,
         }
+        self._layout_cache_key = layout_key
+        self._layout_cache = layout
+        # Geometry depends on layout coordinates, so drop stale batches.
+        self._geom_cache.clear()
+        return layout
     
     def _draw_icon_shape(self, x, y, size, shape='PLUS', color=(0.6, 0.6, 0.6, 1.0), size_multiplier=0.5):
         """Draw an icon using Unicode text symbols."""
@@ -795,7 +947,8 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
         
         # Use Unicode symbols for all icons - clean anti-aliased rendering
         font_id = 0
-        blf.size(font_id, int(size * size_multiplier))
+        font_size = int(size * size_multiplier)
+        blf.size(font_id, font_size)
         blf.color(font_id, *color)
         
         if shape == 'PLUS':
@@ -810,7 +963,7 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
             return  # Unknown shape
         
         # Center the glyph
-        text_w, text_h = blf.dimensions(font_id, glyph)
+        text_w, text_h = self._get_text_dimensions(font_id, font_size, glyph)
         glyph_x = center_x - text_w / 2
         glyph_y = center_y - text_h / 2
         
@@ -822,48 +975,15 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
 
     def _draw_dashed_border(self, x, y, width, height, color=(0.6, 0.6, 0.6, 0.8)):
         """Draw dashed border for the Add button."""
-        import math
-        
-        shader = gpu.shader.from_builtin('UNIFORM_COLOR')
-        
+        shader = self._shader_uniform
+        batch = self._get_dashed_border_batch(x, y, width, height)
+        if batch is None:
+            return
+
         gpu.state.line_width_set(2.0) # Thicker border
         gpu.state.blend_set('ALPHA')
         shader.bind()
         shader.uniform_float("color", color)
-        
-        # Manual Dashed Implementation - Bigger scale
-        vertices = []
-        dash_len = 10
-        gap_len = 6
-        
-        def add_dashed_line(x1, y1, x2, y2):
-            dx = x2 - x1
-            dy = y2 - y1
-            dist = math.sqrt(dx*dx + dy*dy)
-            if dist == 0: return
-            
-            steps = int(dist / (dash_len + gap_len))
-            ux = dx / dist
-            uy = dy / dist
-            
-            for i in range(steps + 1):
-                start_dist = i * (dash_len + gap_len)
-                if start_dist >= dist: break
-                end_dist = min(dist, start_dist + dash_len)
-                
-                vertices.append((x1 + ux * start_dist, y1 + uy * start_dist))
-                vertices.append((x1 + ux * end_dist, y1 + uy * end_dist))
-                
-        # Top
-        add_dashed_line(x, y + height, x + width, y + height)
-        # Bottom
-        add_dashed_line(x, y, x + width, y)
-        # Left
-        add_dashed_line(x, y, x, y + height)
-        # Right
-        add_dashed_line(x + width, y, x + width, y + height)
-
-        batch = batch_for_shader(shader, 'LINES', {"pos": vertices})
         batch.draw(shader)
         gpu.state.blend_set('NONE')
 
@@ -874,6 +994,7 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
             return
         
         try:
+            debug_tools.inc("modal.draw.calls")
             context = bpy.context
             # Only draw in the primary area (prevents drawing in all 3D views)
             if context.area != VIEW3D_OT_thumbnail_gallery._primary_area:
@@ -890,118 +1011,119 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
             if space and hasattr(space, 'region_3d') and space.region_3d:
                 if space.region_3d.view_perspective == 'CAMERA':
                     return
-            layout = self._calculate_layout(context)
-            if not layout:
-                return
-            
-            # Unpack layout
-            thumb_size = layout['thumb_size']
-            start_idx = layout['start_idx']
-            end_idx = layout['end_idx']
-            start_x = layout['start_x']
-            start_y = layout['start_y']
-            visible_views = layout['visible_views']
-            thumb_spacing = layout['thumb_spacing']
-            
-            # Update class state
-            self._thumb_size = thumb_size
-            
-            # --- DRAW THUMBNAILS (CENTER) ---
-            thumbs_start_x = start_x
-            from . import data_storage
-            current_idx = context.scene.saved_views_index
-            num_views = len(data_storage.get_saved_views())
-            
-            # Track hidden view range for scroll indicators
-            first_thumb_pos = None
-            last_thumb_pos = None
-            
-            for draw_pos, i in enumerate(range(start_idx, end_idx)):
-                x = thumbs_start_x + draw_pos * thumb_spacing
-                y = start_y + self.THUMB_PADDING
-                
-                if draw_pos == 0:
-                    first_thumb_pos = (x, y)
-                last_thumb_pos = (x, y)
-                
-                # Draw content first
-                if i in self._textures:
-                    self._draw_texture(self._textures[i], x, y, self._thumb_size, self._thumb_size)
-                else:
-                    self._draw_placeholder(x, y, self._thumb_size, self._thumb_size, i + 1)
-                
-                self._draw_border(x, y, self._thumb_size, self._thumb_size)
-                
-                # Draw highlight border on top (at exact thumbnail position)
-                if i == current_idx:
-                    self._draw_selection_highlight(x, y, self._thumb_size, self._thumb_size)
-                elif i == self._hover_index:
-                    self._draw_hover_highlight(x, y, self._thumb_size, self._thumb_size)
-                
-                if i == self._hover_index:
-                    self._draw_view_name(context, x, y, self._thumb_size, i)
-            
-            # --- DRAW PLUS BUTTON (RIGHT) ---
-            plus_x = thumbs_start_x + (visible_views * thumb_spacing)
-            plus_y = start_y + self.THUMB_PADDING
-            
-            self._plus_btn_rect = (plus_x, plus_y, self._thumb_size, self._thumb_size)
-            
-            # Transparent background for + button
-            self._draw_placeholder(plus_x, plus_y, self._thumb_size, self._thumb_size, -1, color=(0.1, 0.1, 0.1, 0.0))
-            
-            # Dashed border - match refresh/close button colors
-            border_color = (1.0, 1.0, 1.0, 1.0) if self._plus_hover else (0.5, 0.5, 0.5, 0.8)
-            self._draw_dashed_border(plus_x, plus_y, self._thumb_size, self._thumb_size, color=border_color)
-            
-            # Icon color - match refresh/close button colors
-            icon_color = (1.0, 1.0, 1.0, 1.0) if self._plus_hover else (0.5, 0.5, 0.5, 0.8)
-            self._draw_icon_shape(plus_x, plus_y, self._thumb_size, 'PLUS', color=icon_color)
-            
-            # --- DRAW ACTION PANEL (FAR RIGHT) ---
-            # Half-width panel with refresh (top), reorder (middle), and close (bottom) buttons
-            action_panel_width = int(self._thumb_size * 0.5)
-            action_btn_height = int(self._thumb_size / 3)  # 3 buttons
-            action_panel_x = plus_x + self._thumb_size + self.THUMB_PADDING
-            
-            # Refresh All button (top third)
-            refresh_x = action_panel_x
-            refresh_y = start_y + self.THUMB_PADDING + action_btn_height * 2
-            self._refresh_btn_rect = (refresh_x, refresh_y, action_panel_width, action_btn_height)
-            
-            refresh_color = (1.0, 1.0, 1.0, 1.0) if self._refresh_hover else (0.5, 0.5, 0.5, 0.8)
-            self._draw_icon_shape(refresh_x, refresh_y, min(action_panel_width, action_btn_height), 'REFRESH', color=refresh_color, size_multiplier=0.7)
-            
-            # Reorder button (middle third)
-            reorder_x = action_panel_x
-            reorder_y = start_y + self.THUMB_PADDING + action_btn_height
-            self._reorder_btn_rect = (reorder_x, reorder_y, action_panel_width, action_btn_height)
-            
-            reorder_color = (1.0, 1.0, 1.0, 1.0) if self._reorder_hover else (0.5, 0.5, 0.5, 0.8)
-            self._draw_icon_shape(reorder_x, reorder_y, min(action_panel_width, action_btn_height), 'REORDER', color=reorder_color, size_multiplier=0.7)
-            
-            # Close Gallery button (bottom third)
-            close_x = action_panel_x
-            close_y = start_y + self.THUMB_PADDING
-            self._close_btn_rect = (close_x, close_y, action_panel_width, action_btn_height)
-            
-            close_color = (1.0, 1.0, 1.0, 1.0) if self._close_hover else (0.5, 0.5, 0.5, 0.8)
-            self._draw_icon_shape(close_x, close_y, min(action_panel_width, action_btn_height), 'CLOSE', color=close_color, size_multiplier=0.8)
-            
-            # --- SCROLL INDICATORS ---
-            hidden_left = start_idx
-            hidden_right = num_views - end_idx
-            
-            if hidden_left > 0 and first_thumb_pos:
-                self._draw_scroll_indicator(first_thumb_pos[0], first_thumb_pos[1], 
-                                            self._thumb_size, self._thumb_size, hidden_left, 'LEFT')
-            if hidden_right > 0 and last_thumb_pos:
-                self._draw_scroll_indicator(last_thumb_pos[0], last_thumb_pos[1], 
-                                            self._thumb_size, self._thumb_size, hidden_right, 'RIGHT')
-            
-            # --- ENLARGED PREVIEW (MMB) ---
-            if self._preview_index >= 0 and self._preview_index in self._textures:
-                self._draw_enlarged_preview(context, self._preview_index)
+            with debug_tools.timed("modal.draw.total"):
+                layout = self._calculate_layout(context)
+                if not layout:
+                    return
+
+                # Unpack layout
+                thumb_size = layout['thumb_size']
+                start_idx = layout['start_idx']
+                end_idx = layout['end_idx']
+                start_x = layout['start_x']
+                start_y = layout['start_y']
+                visible_views = layout['visible_views']
+                thumb_spacing = layout['thumb_spacing']
+
+                # Update class state
+                self._thumb_size = thumb_size
+
+                # --- DRAW THUMBNAILS (CENTER) ---
+                thumbs_start_x = start_x
+                from . import data_storage
+                current_idx = context.scene.saved_views_index
+                num_views = len(data_storage.get_saved_views())
+
+                # Track hidden view range for scroll indicators
+                first_thumb_pos = None
+                last_thumb_pos = None
+
+                for draw_pos, i in enumerate(range(start_idx, end_idx)):
+                    x = thumbs_start_x + draw_pos * thumb_spacing
+                    y = start_y + self.THUMB_PADDING
+
+                    if draw_pos == 0:
+                        first_thumb_pos = (x, y)
+                    last_thumb_pos = (x, y)
+
+                    # Draw content first
+                    if i in self._textures:
+                        self._draw_texture(self._textures[i], x, y, self._thumb_size, self._thumb_size)
+                    else:
+                        self._draw_placeholder(x, y, self._thumb_size, self._thumb_size, i + 1)
+
+                    self._draw_border(x, y, self._thumb_size, self._thumb_size)
+
+                    # Draw highlight border on top (at exact thumbnail position)
+                    if i == current_idx:
+                        self._draw_selection_highlight(x, y, self._thumb_size, self._thumb_size)
+                    elif i == self._hover_index:
+                        self._draw_hover_highlight(x, y, self._thumb_size, self._thumb_size)
+
+                    if i == self._hover_index:
+                        self._draw_view_name(context, x, y, self._thumb_size, i)
+
+                # --- DRAW PLUS BUTTON (RIGHT) ---
+                plus_x = thumbs_start_x + (visible_views * thumb_spacing)
+                plus_y = start_y + self.THUMB_PADDING
+
+                self._plus_btn_rect = (plus_x, plus_y, self._thumb_size, self._thumb_size)
+
+                # Transparent background for + button
+                self._draw_placeholder(plus_x, plus_y, self._thumb_size, self._thumb_size, -1, color=(0.1, 0.1, 0.1, 0.0))
+
+                # Dashed border - match refresh/close button colors
+                border_color = (1.0, 1.0, 1.0, 1.0) if self._plus_hover else (0.5, 0.5, 0.5, 0.8)
+                self._draw_dashed_border(plus_x, plus_y, self._thumb_size, self._thumb_size, color=border_color)
+
+                # Icon color - match refresh/close button colors
+                icon_color = (1.0, 1.0, 1.0, 1.0) if self._plus_hover else (0.5, 0.5, 0.5, 0.8)
+                self._draw_icon_shape(plus_x, plus_y, self._thumb_size, 'PLUS', color=icon_color)
+
+                # --- DRAW ACTION PANEL (FAR RIGHT) ---
+                # Half-width panel with refresh (top), reorder (middle), and close (bottom) buttons
+                action_panel_width = int(self._thumb_size * 0.5)
+                action_btn_height = int(self._thumb_size / 3)  # 3 buttons
+                action_panel_x = plus_x + self._thumb_size + self.THUMB_PADDING
+
+                # Refresh All button (top third)
+                refresh_x = action_panel_x
+                refresh_y = start_y + self.THUMB_PADDING + action_btn_height * 2
+                self._refresh_btn_rect = (refresh_x, refresh_y, action_panel_width, action_btn_height)
+
+                refresh_color = (1.0, 1.0, 1.0, 1.0) if self._refresh_hover else (0.5, 0.5, 0.5, 0.8)
+                self._draw_icon_shape(refresh_x, refresh_y, min(action_panel_width, action_btn_height), 'REFRESH', color=refresh_color, size_multiplier=0.7)
+
+                # Reorder button (middle third)
+                reorder_x = action_panel_x
+                reorder_y = start_y + self.THUMB_PADDING + action_btn_height
+                self._reorder_btn_rect = (reorder_x, reorder_y, action_panel_width, action_btn_height)
+
+                reorder_color = (1.0, 1.0, 1.0, 1.0) if self._reorder_hover else (0.5, 0.5, 0.5, 0.8)
+                self._draw_icon_shape(reorder_x, reorder_y, min(action_panel_width, action_btn_height), 'REORDER', color=reorder_color, size_multiplier=0.7)
+
+                # Close Gallery button (bottom third)
+                close_x = action_panel_x
+                close_y = start_y + self.THUMB_PADDING
+                self._close_btn_rect = (close_x, close_y, action_panel_width, action_btn_height)
+
+                close_color = (1.0, 1.0, 1.0, 1.0) if self._close_hover else (0.5, 0.5, 0.5, 0.8)
+                self._draw_icon_shape(close_x, close_y, min(action_panel_width, action_btn_height), 'CLOSE', color=close_color, size_multiplier=0.8)
+
+                # --- SCROLL INDICATORS ---
+                hidden_left = start_idx
+                hidden_right = num_views - end_idx
+
+                if hidden_left > 0 and first_thumb_pos:
+                    self._draw_scroll_indicator(first_thumb_pos[0], first_thumb_pos[1],
+                                                self._thumb_size, self._thumb_size, hidden_left, 'LEFT')
+                if hidden_right > 0 and last_thumb_pos:
+                    self._draw_scroll_indicator(last_thumb_pos[0], last_thumb_pos[1],
+                                                self._thumb_size, self._thumb_size, hidden_right, 'RIGHT')
+
+                # --- ENLARGED PREVIEW (MMB) ---
+                if self._preview_index >= 0 and self._preview_index in self._textures:
+                    self._draw_enlarged_preview(context, self._preview_index)
                 
         except ReferenceError:
             # Operator instance has been garbage collected
@@ -1009,25 +1131,18 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
     
     def _draw_scroll_indicator(self, x, y, width, height, count, side):
         """Draw +N overlay on edge thumbnail to indicate hidden views."""
-        import blf
-        
         # Semi-transparent overlay on the appropriate half
         overlay_width = width // 2
         if side == 'LEFT':
             overlay_x = x
         else:
             overlay_x = x + width - overlay_width
-        
+
         # Draw semi-transparent gray background
-        vertices = (
-            (overlay_x, y), (overlay_x + overlay_width, y),
-            (overlay_x + overlay_width, y + height), (overlay_x, y + height)
-        )
-        indices = ((0, 1, 2), (2, 3, 0))
-        
-        shader = gpu.shader.from_builtin('UNIFORM_COLOR')
-        batch = batch_for_shader(shader, 'TRIS', {"pos": vertices}, indices=indices)
-        
+        shader = self._shader_uniform
+        batch = self._get_rect_batch('TRIS', overlay_x, y, overlay_width, height)
+        if batch is None:
+            return
         gpu.state.blend_set('ALPHA')
         shader.bind()
         shader.uniform_float("color", (0.2, 0.2, 0.2, 0.5))
@@ -1039,7 +1154,7 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
         font_size = 14
         blf.size(font_id, font_size)
         text = f"+{count}"
-        text_width, text_height = blf.dimensions(font_id, text)
+        text_width, text_height = self._get_text_dimensions(font_id, font_size, text)
         
         text_x = overlay_x + (overlay_width - text_width) / 2
         text_y = y + (height - text_height) / 2
@@ -1089,14 +1204,10 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
         preview_y = preview_bottom
         
         # Draw dark backdrop (full screen)
-        backdrop_verts = (
-            (0, 0), (region.width, 0),
-            (region.width, region.height), (0, region.height)
-        )
-        backdrop_indices = ((0, 1, 2), (2, 3, 0))
-        
-        shader = gpu.shader.from_builtin('UNIFORM_COLOR')
-        batch = batch_for_shader(shader, 'TRIS', {"pos": backdrop_verts}, indices=backdrop_indices)
+        shader = self._shader_uniform
+        batch = self._get_rect_batch('TRIS', 0, 0, region.width, region.height)
+        if batch is None:
+            return
         
         gpu.state.blend_set('ALPHA')
         shader.bind()
@@ -1113,15 +1224,10 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
     
     def _draw_background(self, x, y, width, height):
         """Draw semi-transparent background rectangle."""
-        vertices = (
-            (x, y), (x + width, y),
-            (x + width, y + height), (x, y + height)
-        )
-        indices = ((0, 1, 2), (2, 3, 0))
-        
-        shader = gpu.shader.from_builtin('UNIFORM_COLOR')
-        batch = batch_for_shader(shader, 'TRIS', {"pos": vertices}, indices=indices)
-        
+        shader = self._shader_uniform
+        batch = self._get_rect_batch('TRIS', x, y, width, height)
+        if batch is None:
+            return
         gpu.state.blend_set('ALPHA')
         shader.bind()
         shader.uniform_float("color", (0.1, 0.1, 0.1, 0.85))
@@ -1133,16 +1239,11 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
         # Get theme color for active object
         theme = bpy.context.preferences.themes[0].view_3d
         color = (*theme.object_active[:3], 1.0)
-        
-        # Draw as thick border outline instead of filled rectangle
-        vertices = (
-            (x, y), (x + width, y),
-            (x + width, y + height), (x, y + height), (x, y)
-        )
-        
-        shader = gpu.shader.from_builtin('UNIFORM_COLOR')
-        batch = batch_for_shader(shader, 'LINE_STRIP', {"pos": vertices})
-        
+
+        batch = self._get_rect_batch('LINE', x, y, width, height)
+        if batch is None:
+            return
+        shader = self._shader_uniform
         gpu.state.blend_set('ALPHA')
         gpu.state.line_width_set(4.0)  # Thicker border for selection
         shader.bind()
@@ -1153,20 +1254,10 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
     
     def _draw_texture(self, texture, x, y, width, height):
         """Draw a thumbnail texture."""
-        vertices = (
-            (x, y), (x + width, y),
-            (x + width, y + height), (x, y + height)
-        )
-        uvs = ((0, 0), (1, 0), (1, 1), (0, 1))
-        indices = ((0, 1, 2), (2, 3, 0))
-        
-        shader = gpu.shader.from_builtin('IMAGE')
-        batch = batch_for_shader(
-            shader, 'TRIS',
-            {"pos": vertices, "texCoord": uvs},
-            indices=indices
-        )
-        
+        shader = self._shader_image
+        batch = self._get_rect_batch('IMAGE', x, y, width, height)
+        if batch is None:
+            return
         gpu.state.blend_set('ALPHA')
         shader.bind()
         shader.uniform_sampler("image", texture)
@@ -1175,16 +1266,10 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
     
     def _draw_placeholder(self, x, y, width, height, number, color=(0.3, 0.3, 0.3, 1.0)):
         """Draw placeholder for views without thumbnails."""
-        # Dark background
-        vertices = (
-            (x, y), (x + width, y),
-            (x + width, y + height), (x, y + height)
-        )
-        indices = ((0, 1, 2), (2, 3, 0))
-        
-        shader = gpu.shader.from_builtin('UNIFORM_COLOR')
-        batch = batch_for_shader(shader, 'TRIS', {"pos": vertices}, indices=indices)
-        
+        shader = self._shader_uniform
+        batch = self._get_rect_batch('TRIS', x, y, width, height)
+        if batch is None:
+            return
         gpu.state.blend_set('ALPHA')
         shader.bind()
         shader.uniform_float("color", color)
@@ -1193,14 +1278,10 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
     
     def _draw_border(self, x, y, width, height):
         """Draw faint black border around thumbnail."""
-        vertices = (
-            (x, y), (x + width, y),
-            (x + width, y + height), (x, y + height), (x, y)
-        )
-        
-        shader = gpu.shader.from_builtin('UNIFORM_COLOR')
-        batch = batch_for_shader(shader, 'LINE_STRIP', {"pos": vertices})
-        
+        shader = self._shader_uniform
+        batch = self._get_rect_batch('LINE', x, y, width, height)
+        if batch is None:
+            return
         # Disable depth test so all edges render uniformly
         gpu.state.depth_test_set('NONE')
         gpu.state.blend_set('ALPHA')
@@ -1221,6 +1302,7 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
         start_x = layout['start_x']
         start_y = layout['start_y']
         thumb_spacing = layout['thumb_spacing']
+        thumb_size = layout['thumb_size']
         
         thumbs_start_x = start_x
         
@@ -1230,7 +1312,7 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
             x = thumbs_start_x + draw_pos * thumb_spacing
             y = start_y + self.THUMB_PADDING
             
-            if x <= mx <= x + self._thumb_size and y <= my <= y + self._thumb_size:
+            if x <= mx <= x + thumb_size and y <= my <= y + thumb_size:
                 return i
         
         return None
@@ -1265,16 +1347,11 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
         # Get theme color for selected object
         theme = bpy.context.preferences.themes[0].view_3d
         color = (*theme.object_selected[:3], 0.8)
-        
-        # Draw as border outline instead of filled rectangle
-        vertices = (
-            (x, y), (x + width, y),
-            (x + width, y + height), (x, y + height), (x, y)
-        )
-        
-        shader = gpu.shader.from_builtin('UNIFORM_COLOR')
-        batch = batch_for_shader(shader, 'LINE_STRIP', {"pos": vertices})
-        
+
+        batch = self._get_rect_batch('LINE', x, y, width, height)
+        if batch is None:
+            return
+        shader = self._shader_uniform
         gpu.state.blend_set('ALPHA')
         gpu.state.line_width_set(2.0)  # Slightly thinner for hover
         shader.bind()
@@ -1297,7 +1374,7 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
         padding = 6  # Padding around text for background
         
         blf.size(font_id, font_size)
-        text_width, text_height = blf.dimensions(font_id, view_name)
+        text_width, text_height = self._get_text_dimensions(font_id, font_size, view_name)
         
         # Center inside thumbnail
         text_x = x + (thumb_size - text_width) / 2
@@ -1310,15 +1387,11 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
         bg_h = text_height + padding * 2
         
         gpu.state.blend_set('ALPHA')
-        shader = gpu.shader.from_builtin('UNIFORM_COLOR')
-        vertices = [
-            (bg_x, bg_y),
-            (bg_x + bg_w, bg_y),
-            (bg_x + bg_w, bg_y + bg_h),
-            (bg_x, bg_y + bg_h),
-        ]
-        indices = [(0, 1, 2), (2, 3, 0)]
-        batch = batch_for_shader(shader, 'TRIS', {"pos": vertices}, indices=indices)
+        shader = self._shader_uniform
+        batch = self._get_rect_batch('TRIS', bg_x, bg_y, bg_w, bg_h)
+        if batch is None:
+            gpu.state.blend_set('NONE')
+            return
         shader.bind()
         shader.uniform_float("color", (0.0, 0.0, 0.0, 0.7))
         batch.draw(shader)
@@ -1357,6 +1430,13 @@ def _reset_gallery_state():
     
     # Reset all class-level state
     try:
+        for tex in list(VIEW3D_OT_thumbnail_gallery._textures.values()):
+            free_fn = getattr(tex, "free", None)
+            if callable(free_fn):
+                try:
+                    free_fn()
+                except Exception:
+                    pass
         VIEW3D_OT_thumbnail_gallery._is_active = False
         VIEW3D_OT_thumbnail_gallery._instance = None
         VIEW3D_OT_thumbnail_gallery._needs_refresh = False
@@ -1365,6 +1445,14 @@ def _reset_gallery_state():
         VIEW3D_OT_thumbnail_gallery._context_menu_index = -1
         VIEW3D_OT_thumbnail_gallery._textures.clear()
     except:
+        pass
+
+    # Clean up any stale temp display images.
+    try:
+        for img in list(bpy.data.images):
+            if img.name.startswith(".VP_Display_"):
+                bpy.data.images.remove(img)
+    except Exception:
         pass
     
     # Force redraw all 3D views to clear any stale gallery overlay
@@ -1512,6 +1600,7 @@ class VIEW3D_OT_gallery_flip_position(bpy.types.Operator):
         instance = VIEW3D_OT_thumbnail_gallery._instance
         if instance:
             instance._flip_to_top = not instance._flip_to_top
+            instance._invalidate_layout_cache()
             context.area.tag_redraw()
         return {'FINISHED'}
 
