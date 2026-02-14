@@ -8,20 +8,34 @@ import bpy
 # PREFERENCE UPDATE CALLBACKS
 # ============================================================================
 
+def _iter_viewpilot_camera_collections():
+    """Yield (scene, collection) pairs for all ViewPilot-tagged camera collections."""
+    seen = set()
+
+    def _walk(scene, parent):
+        for child in parent.children:
+            if child.get("is_viewport_cameras_collection"):
+                ptr = child.as_pointer()
+                if ptr not in seen:
+                    seen.add(ptr)
+                    yield (scene, child)
+            yield from _walk(scene, child)
+
+    for scene in bpy.data.scenes:
+        yield from _walk(scene, scene.collection)
+
+
 def update_collection_name(self, context):
     """Update existing viewport cameras collection name when preference changes."""
-    for coll in bpy.data.collections:
-        if coll.get("is_viewport_cameras_collection"):
-            coll.name = self.camera_collection_name
-            break
+    for scene, coll in _iter_viewpilot_camera_collections():
+        coll["viewpilot_base_name"] = self.camera_collection_name
+        coll.name = f"{self.camera_collection_name} [{scene.name}]"
 
 
 def update_collection_color(self, context):
     """Update existing viewport cameras collection color when preference changes."""
-    for coll in bpy.data.collections:
-        if coll.get("is_viewport_cameras_collection"):
-            coll.color_tag = self.camera_collection_color
-            break
+    for _scene, coll in _iter_viewpilot_camera_collections():
+        coll.color_tag = self.camera_collection_color
 
 
 # ============================================================================

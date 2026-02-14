@@ -1316,7 +1316,7 @@ class VIEW3D_OT_update_saved_view(bpy.types.Operator):
 class VIEW3D_OT_rename_saved_view(bpy.types.Operator):
     """Rename the selected saved view"""
     bl_idname = "view3d.rename_saved_view"
-    bl_label = ""  # Empty label for minimal UI
+    bl_label = "Rename Saved View"
     bl_options = {'REGISTER', 'UNDO', 'INTERNAL'}
     
     # Optional index - if >= 0, use this instead of saved_views_index
@@ -1327,60 +1327,30 @@ class VIEW3D_OT_rename_saved_view(bpy.types.Operator):
         if self.index >= 0:
             return self.index
         return context.scene.saved_views_index
-    
-    def update_name(self, context):
-        """Apply rename immediately as user types, and sync associated camera."""
-        # Use global context to ensure access to scene data in callback
-        import bpy
-        from . import data_storage
-        ctx = bpy.context
-        
-        views = data_storage.get_saved_views()
-        
-        # Inline index logic (can't call instance methods in property callbacks)
-        idx = self.index if self.index >= 0 else ctx.scene.saved_views_index
-        
-        if 0 <= idx < len(views):
-            view_dict = views[idx]
-            old_name = view_dict.get("name", "View")
-            new_name = self.new_name
-            
-            # Avoid redundant updates
-            if old_name == new_name:
-                return
-            
-            # Update the view name in JSON storage
-            view_dict["name"] = new_name
-            if not data_storage.update_saved_view(idx, view_dict):
-                return
-            
-            # Sync camera if one exists with the old view name
-            # Look for cameras matching pattern: "Prefix [Old View Name]" or just old name
-            try:
-                from .preferences import get_preferences
-                prefs = get_preferences()
-                prefix = prefs.camera_name_prefix
-            except:
-                prefix = "ViewCam"
-            
-            old_cam_name = f"{prefix} [{old_name}]"
-            new_cam_name = f"{prefix} [{new_name}]"
-            
-            # Find and rename camera object and data
-            for obj in bpy.data.objects:
-                if obj.type == 'CAMERA' and obj.name == old_cam_name:
-                    obj.name = new_cam_name
-                    if obj.data:
-                        obj.data.name = new_cam_name
-                    break
-            
-            # Note: update_saved_view auto-syncs PropertyGroup
+
+    def _rename_associated_camera(self, old_name: str, new_name: str) -> None:
+        """Rename camera datablocks associated with this view name."""
+        try:
+            from .preferences import get_preferences
+            prefs = get_preferences()
+            prefix = prefs.camera_name_prefix
+        except Exception:
+            prefix = "ViewCam"
+
+        old_cam_name = f"{prefix} [{old_name}]"
+        new_cam_name = f"{prefix} [{new_name}]"
+
+        for obj in bpy.data.objects:
+            if obj.type == 'CAMERA' and obj.name == old_cam_name:
+                obj.name = new_cam_name
+                if obj.data:
+                    obj.data.name = new_cam_name
+                break
     
     new_name: bpy.props.StringProperty(
         name="",
         description="New name for the saved view",
-        default="",
-        update=update_name
+        default=""
     )
     
     @classmethod
@@ -1406,7 +1376,7 @@ class VIEW3D_OT_rename_saved_view(bpy.types.Operator):
         idx = self.get_target_index(context)
         if 0 <= idx < len(views):
             self.new_name = views[idx].get("name", "View")
-        return context.window_manager.invoke_popup(self, width=200)
+        return context.window_manager.invoke_props_dialog(self, width=260)
     
     def draw(self, context):
         layout = self.layout
@@ -1417,6 +1387,42 @@ class VIEW3D_OT_rename_saved_view(bpy.types.Operator):
         row.prop(self, "new_name", text="")
     
     def execute(self, context):
+        from . import data_storage
+
+        views = data_storage.get_saved_views()
+        idx = self.get_target_index(context)
+        if not (0 <= idx < len(views)):
+            self.report({'WARNING'}, "No saved view selected")
+            return {'CANCELLED'}
+
+        view_dict = views[idx]
+        old_name = view_dict.get("name", "View")
+        new_name = self.new_name.strip()
+
+        if not new_name:
+            self.report({'WARNING'}, "View name cannot be empty")
+            return {'CANCELLED'}
+
+        if old_name == new_name:
+            return {'FINISHED'}
+
+        view_dict["name"] = new_name
+        if not data_storage.update_saved_view(idx, view_dict):
+            _handle_storage_invalid(context, self, "rename view")
+            return {'CANCELLED'}
+
+        self._rename_associated_camera(old_name, new_name)
+
+        try:
+            from .properties import invalidate_saved_views_ui_caches
+            invalidate_saved_views_ui_caches()
+        except Exception:
+            pass
+
+        if VIEW3D_OT_thumbnail_gallery._is_active:
+            VIEW3D_OT_thumbnail_gallery.request_refresh()
+
+        self.report({'INFO'}, f"Renamed view: {new_name}")
         return {'FINISHED'}
 
 
