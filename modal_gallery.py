@@ -320,7 +320,7 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
             # If in preview mode (MMB held), update preview on thumbnail hover
             if self._preview_index >= 0:
                 new_thumb = self._get_clicked_thumbnail(context, event)
-                if new_thumb is not None and new_thumb in self._textures:
+                if new_thumb is not None:
                     if new_thumb != self._preview_index:
                         self._preview_index = new_thumb
                         context.area.tag_redraw()
@@ -458,7 +458,7 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
         elif event.type == 'MIDDLEMOUSE':
             if event.value == 'PRESS':
                 clicked_index = self._get_clicked_thumbnail(context, event)
-                if clicked_index is not None and clicked_index in self._textures:
+                if clicked_index is not None:
                     self._preview_index = clicked_index
                     context.area.tag_redraw()
                     return {'RUNNING_MODAL'}
@@ -467,6 +467,13 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
                     self._preview_index = -1
                     context.area.tag_redraw()
                     return {'RUNNING_MODAL'}
+            elif self._preview_index >= 0:
+                # Consume intermediate MMB events while preview mode is active
+                # so viewport navigation operators don't steal mouse movement.
+                return {'RUNNING_MODAL'}
+            elif self._is_mouse_over_gallery(context, event):
+                # Prevent entering viewport navigation while interacting with gallery.
+                return {'RUNNING_MODAL'}
             return {'PASS_THROUGH'}
         
         # Mouse wheel scrolling (only when scrolling is needed)
