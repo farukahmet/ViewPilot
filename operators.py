@@ -5,7 +5,7 @@ import time
 import traceback
 from mathutils import Vector, Quaternion
 
-from . import utils
+from . import utils, debug_tools
 from .utils import (
     get_current_view_state,
     states_are_similar,
@@ -35,78 +35,136 @@ class VIEW3D_OT_view_history_monitor(bpy.types.Operator):
     settle_start_time = 0.0
     was_in_camera_view = False  # Track camera view transitions
     last_selection_hash = None  # Track selection changes for orbit mode
+    last_orbit_mode = False  # Track orbit mode transitions
     last_scene_count = 0  # Track scene count for UUID duplicate detection
     last_view_layer_counts = {}  # Track view layer count per scene {scene_name: count}
     last_camera_count = 0  # Track camera count for dropdown sync
+    last_maintenance_time = 0.0  # Last periodic maintenance timestamp
     
     # Settings
     CHECK_INTERVAL = 0.1
+    MAINTENANCE_INTERVAL = 0.5
+
+    def _pass_through_tick(self, tick_start=None):
+        if tick_start is not None:
+            debug_tools.add_timing(
+                "history.monitor.tick.total",
+                (time.perf_counter() - tick_start) * 1000.0
+            )
+        return {'PASS_THROUGH'}
+
+    def _run_periodic_maintenance(self, context):
+        """Run lower-frequency checks that do not need to execute every timer tick."""
+        from . import data_storage
+
+        # --- SCENE COUNT CHANGE DETECTION ---
+        current_scene_count = len(bpy.data.scenes)
+        if current_scene_count != self.last_scene_count:
+            if self.last_scene_count > 0:  # Skip initial detection
+                fixed = data_storage.fix_duplicate_scene_uuids()
+                if fixed:
+                    print(f"[ViewPilot] Fixed {fixed} duplicate scene UUID(s)")
+                # Also check for new scenes needing UUIDs
+                for scene in bpy.data.scenes:
+                    data_storage.ensure_scene_uuid(scene)
+            self.last_scene_count = current_scene_count
+
+        # --- VIEW LAYER COUNT CHANGE DETECTION ---
+        current_scene_names = set()
+        for scene in bpy.data.scenes:
+            current_scene_names.add(scene.name)
+            current_vl_count = len(scene.view_layers)
+            last_vl_count = self.last_view_layer_counts.get(scene.name)
+
+            # Initialize baseline without triggering duplicate-fix logic.
+            if last_vl_count is None:
+                self.last_view_layer_counts[scene.name] = current_vl_count
+                continue
+
+            if current_vl_count != last_vl_count:
+                fixed = data_storage.fix_duplicate_view_layer_uuids(scene)
+                if fixed:
+                    print(f"[ViewPilot] Fixed {fixed} duplicate view layer UUID(s) in '{scene.name}'")
+                # Also ensure new view layers have UUIDs
+                for vl in scene.view_layers:
+                    data_storage.ensure_view_layer_uuid(vl)
+                self.last_view_layer_counts[scene.name] = current_vl_count
+
+        # Remove stale tracking entries for scenes that no longer exist.
+        for scene_name in tuple(self.last_view_layer_counts.keys()):
+            if scene_name not in current_scene_names:
+                del self.last_view_layer_counts[scene_name]
+
+        # --- CAMERA COUNT CHANGE DETECTION ---
+        camera_count = sum(1 for obj in context.scene.objects if obj.type == 'CAMERA')
+        if camera_count != self.last_camera_count:
+            self.last_camera_count = camera_count
+            # Resync camera dropdown to current scene camera.
+            props = context.scene.viewpilot
+            active_cam = context.scene.camera
+            if active_cam:
+                try:
+                    props.camera_enum = active_cam.name
+                except TypeError:
+                    pass  # Enum items not yet populated
+
+    def _maybe_run_periodic_maintenance(self, context, now):
+        if (now - self.last_maintenance_time) < self.MAINTENANCE_INTERVAL:
+            debug_tools.inc("history.monitor.maintenance.skipped")
+            return
+        debug_tools.inc("history.monitor.maintenance.run")
+        self.last_maintenance_time = now
+        with debug_tools.timed("history.monitor.maintenance.total"):
+            self._run_periodic_maintenance(context)
     
     def modal(self, context, event):
         if event.type == 'TIMER':
+            debug_tools.inc("history.monitor.tick")
+            tick_start = time.perf_counter()
+
             controller = get_controller()
-            
-            # --- SCENE COUNT CHANGE DETECTION ---
-            # If scene count changed, fix duplicate UUIDs (from scene duplication)
-            current_scene_count = len(bpy.data.scenes)
-            if current_scene_count != self.last_scene_count:
-                if self.last_scene_count > 0:  # Skip initial detection
-                    from . import data_storage
-                    fixed = data_storage.fix_duplicate_scene_uuids()
-                    if fixed:
-                        print(f"[ViewPilot] Fixed {fixed} duplicate scene UUID(s)")
-                    # Also check for new scenes needing UUIDs
-                    for scene in bpy.data.scenes:
-                        data_storage.ensure_scene_uuid(scene)
-                self.last_scene_count = current_scene_count
-            
-            # --- VIEW LAYER COUNT CHANGE DETECTION ---
-            # Check each scene for view layer count changes
-            from . import data_storage
-            for scene in bpy.data.scenes:
-                current_vl_count = len(scene.view_layers)
-                last_vl_count = self.last_view_layer_counts.get(scene.name, 0)
-                
-                if current_vl_count != last_vl_count:
-                    if last_vl_count > 0:  # Skip initial detection
-                        fixed = data_storage.fix_duplicate_view_layer_uuids(scene)
-                        if fixed:
-                            print(f"[ViewPilot] Fixed {fixed} duplicate view layer UUID(s) in '{scene.name}'")
-                        # Also ensure new view layers have UUIDs
-                        for vl in scene.view_layers:
-                            data_storage.ensure_view_layer_uuid(vl)
-                    self.last_view_layer_counts[scene.name] = current_vl_count
-            
-            # --- CAMERA COUNT CHANGE DETECTION ---
-            # If camera count changed, resync camera dropdown to prevent blank selection
-            camera_count = sum(1 for obj in context.scene.objects if obj.type == 'CAMERA')
-            if camera_count != self.last_camera_count:
-                self.last_camera_count = camera_count
-                # Resync camera dropdown to current scene camera
-                props = context.scene.viewpilot
-                active_cam = context.scene.camera
-                if active_cam:
-                    try:
-                        props.camera_enum = active_cam.name
-                    except TypeError:
-                        pass  # Enum items not yet populated
+            now = time.time()
+            self._maybe_run_periodic_maintenance(context, now)
             
             # Auto-initialize if needed
             if not context.scene.viewpilot.init_complete:
-                 context.scene.viewpilot.reinitialize_from_context(context)
+                context.scene.viewpilot.reinitialize_from_context(context)
 
-            current_state = get_current_view_state(context)
+            with debug_tools.timed("history.monitor.capture_state.total"):
+                current_state = get_current_view_state(context)
             if not current_state:
-                return {'PASS_THROUGH'}
+                debug_tools.inc("history.monitor.tick.no_state")
+                return self._pass_through_tick(tick_start)
             
             # Check if we're in a grace period
             # During grace period: DON'T reinitialize (to avoid fighting slider input)
             # But DO continue tracking movement so history can be recorded after settle
             in_grace = controller.is_in_grace_period()
+            props = context.scene.viewpilot
+            is_in_camera = current_state.get('view_perspective') == 'CAMERA'
+
+            # Orbit mode can be enabled while idle; seed selection baseline on transition.
+            if props.orbit_around_selection and not self.last_orbit_mode:
+                current_sel = frozenset(obj.name for obj in context.selected_objects)
+                self.last_selection_hash = hash(current_sel)
+            self.last_orbit_mode = bool(props.orbit_around_selection)
+
+            # Fast path: unchanged idle ticks with no special sync modes enabled.
+            if (
+                self.last_known_state is not None and
+                not self.is_moving and
+                not in_grace and
+                not self.was_in_camera_view and
+                not is_in_camera and
+                not props.orbit_around_selection and
+                not props.keep_camera_active and
+                states_are_similar(current_state, self.last_known_state)
+            ):
+                debug_tools.inc("history.monitor.tick.fast_path_idle")
+                return self._pass_through_tick(tick_start)
             
             # --- SELECTION CHANGE DETECTION ---
             # If orbit mode is active and selection changes, disable orbit
-            props = context.scene.viewpilot
             if props.orbit_around_selection:
                 # Calculate hash of current selection (names of selected objects)
                 current_sel = frozenset(obj.name for obj in context.selected_objects)
@@ -135,12 +193,10 @@ class VIEW3D_OT_view_history_monitor(bpy.types.Operator):
                         props['keep_camera_active'] = False
             
             # Handle camera view - sync UI when camera properties change externally
-            is_in_camera = current_state.get('view_perspective') == 'CAMERA'
             if is_in_camera:
                 cam = context.scene.camera
                 if cam:
                     # Check if camera properties have changed externally
-                    props = context.scene.viewpilot
                     cam_loc = cam.location
                     cam_rot = cam.rotation_euler
                     
@@ -161,7 +217,7 @@ class VIEW3D_OT_view_history_monitor(bpy.types.Operator):
                 self.was_in_camera_view = True
                 self.last_known_state = current_state
                 self.is_moving = False
-                return {'PASS_THROUGH'}
+                return self._pass_through_tick(tick_start)
             else:
                 # Just exited camera view - reinitialize to viewport mode
                 if self.was_in_camera_view and not in_grace:
@@ -171,8 +227,9 @@ class VIEW3D_OT_view_history_monitor(bpy.types.Operator):
             # Initialize if empty (and not in camera view)
             if self.last_known_state is None:
                 self.last_known_state = current_state
+                debug_tools.inc("history.monitor.history.seed")
                 add_to_history(current_state)
-                return {'PASS_THROUGH'}
+                return self._pass_through_tick(tick_start)
             
             # Check for difference
             if not states_are_similar(current_state, self.last_known_state):
@@ -226,7 +283,7 @@ class VIEW3D_OT_view_history_monitor(bpy.types.Operator):
                 if states_are_similar(current_state, self.last_known_state):
                     # False alarm or drift
                     self.is_moving = False
-                    return {'PASS_THROUGH'}
+                    return self._pass_through_tick(tick_start)
 
                 # Check if this change is just us restoring a history state
                 if utils.view_history_index != -1 and utils.view_history:
@@ -237,7 +294,7 @@ class VIEW3D_OT_view_history_monitor(bpy.types.Operator):
                             # We just restored this state. Update tracker but DON'T save as new.
                             self.last_known_state = current_state
                             self.is_moving = False
-                            return {'PASS_THROUGH'}
+                            return self._pass_through_tick(tick_start)
 
                 # --- AUTO-DISABLE ORBIT MODE ON EXTERNAL MOVEMENT ---
                 # Only disable orbit if the camera POSITION or ROTATION actually changed.
@@ -255,8 +312,9 @@ class VIEW3D_OT_view_history_monitor(bpy.types.Operator):
                         print("[ViewPilot] Orbit mode auto-disabled (external movement detected)")
 
                 # Movement detected!
+                debug_tools.inc("history.monitor.movement.detected")
                 self.is_moving = True
-                self.settle_start_time = time.time()
+                self.settle_start_time = now
                 self.last_known_state = current_state
             
             elif self.is_moving:
@@ -265,13 +323,20 @@ class VIEW3D_OT_view_history_monitor(bpy.types.Operator):
                     settle_delay = get_preferences().settle_delay
                 except:
                     settle_delay = 0.3
-                if (time.time() - self.settle_start_time) > settle_delay:
+                if (now - self.settle_start_time) > settle_delay:
                     # Check if we should record this to history
                     # (suppressed during VIEW_RESTORE, HISTORY_NAV, or grace periods)
                     if controller.should_record_history():
+                        debug_tools.inc("history.monitor.history.record_allowed")
                         print(f"[View History] Saved. (History Size: {len(utils.view_history)})")
-                        add_to_history(current_state)
+                        with debug_tools.timed("history.monitor.history_add.total"):
+                            add_to_history(current_state)
+                        debug_tools.inc("history.monitor.history.add_called")
+                    else:
+                        debug_tools.inc("history.monitor.history.record_suppressed")
                     self.is_moving = False
+
+            return self._pass_through_tick(tick_start)
                     
         return {'PASS_THROUGH'}
     
@@ -279,6 +344,16 @@ class VIEW3D_OT_view_history_monitor(bpy.types.Operator):
         if utils.monitor_running:
             return {'CANCELLED'}
         utils.monitor_running = True
+        self.last_known_state = None
+        self.is_moving = False
+        self.settle_start_time = 0.0
+        self.was_in_camera_view = False
+        self.last_selection_hash = None
+        self.last_orbit_mode = bool(context.scene.viewpilot.orbit_around_selection)
+        self.last_scene_count = len(bpy.data.scenes)
+        self.last_view_layer_counts = {scene.name: len(scene.view_layers) for scene in bpy.data.scenes}
+        self.last_camera_count = sum(1 for obj in context.scene.objects if obj.type == 'CAMERA')
+        self.last_maintenance_time = 0.0
         self._timer = context.window_manager.event_timer_add(self.CHECK_INTERVAL, window=context.window)
         context.window_manager.modal_handler_add(self)
         print("[View History] Monitor Started")

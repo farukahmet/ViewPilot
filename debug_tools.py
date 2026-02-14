@@ -45,6 +45,14 @@ def inc(name: str, amount: int = 1) -> None:
     _counters[name] += amount
 
 
+def add_timing(name: str, dt_ms: float) -> None:
+    """Record a precomputed duration in milliseconds."""
+    if not enabled():
+        return
+    _timing_total_ms[name] += dt_ms
+    _timing_count[name] += 1
+
+
 @contextmanager
 def timed(name: str) -> Iterator[None]:
     if not enabled():
