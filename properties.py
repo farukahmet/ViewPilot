@@ -11,7 +11,8 @@ from .state_controller import get_controller, UpdateSource, LockPriority
 from . import debug_tools
 from .utils import (
     get_view_location, set_view_location, add_to_history,
-    get_selection_center
+    get_selection_center, find_view3d_context,
+    find_view3d_override_context, find_window_for_area
 )
 
 # ============================================================================
@@ -176,21 +177,9 @@ def update_orbit_mode_toggle(self, context):
             # Check if we're in camera mode
             in_camera_mode = self.is_camera_mode and context.scene.camera
             
-            # 1. Find the 3D View area and region for proper context
-            target_area = None
-            target_region = None
-            region_3d = None
-            
-            for area in bpy.context.screen.areas:
-                if area.type == 'VIEW_3D':
-                    target_area = area
-                    for space in area.spaces:
-                        if space.type == 'VIEW_3D':
-                            region_3d = space.region_3d
-                    for region in area.regions:
-                        if region.type == 'WINDOW':
-                            target_region = region
-                    break
+            # 1. Find the 3D View area and WINDOW region for proper override context.
+            target_area, _, target_region = find_view3d_override_context(context)
+            target_window = find_window_for_area(context, target_area)
             
             # 2. Calculate pivot point from selection center FIRST
             center = get_selection_center(context)
@@ -203,7 +192,10 @@ def update_orbit_mode_toggle(self, context):
             if not in_camera_mode:
                 if target_area and target_region:
                     try:
-                        with bpy.context.temp_override(area=target_area, region=target_region):
+                        override_kwargs = {"area": target_area, "region": target_region}
+                        if target_window:
+                            override_kwargs["window"] = target_window
+                        with bpy.context.temp_override(**override_kwargs):
                             if bpy.context.selected_objects:
                                 bpy.ops.view3d.view_selected('INVOKE_DEFAULT')
                             else:
@@ -261,14 +253,7 @@ def update_orbit_mode_toggle(self, context):
                         
                     else:
                         # VIEWPORT MODE: Use region_3d
-                        region_3d = None
-                        for area in bpy.context.screen.areas:
-                            if area.type == 'VIEW_3D':
-                                for space in area.spaces:
-                                    if space.type == 'VIEW_3D':
-                                        region_3d = space.region_3d
-                                        break
-                                break
+                        _, _, region_3d = find_view3d_context(bpy.context)
                         
                         if not region_3d:
                             print("[ViewPilot] Could not find 3D view for orbit init")
@@ -864,18 +849,7 @@ def update_camera_enum(self, context):
         selected = self.camera_enum
         
         # Resolve region robustly
-        region = getattr(context, 'region_data', None)
-        if not region:
-            # Find a 3D View region
-            if context.screen:
-                for area in context.screen.areas:
-                    if area.type == 'VIEW_3D':
-                        for space in area.spaces:
-                            if space.type == 'VIEW_3D':
-                                region = space.region_3d
-                                break
-                    if region:
-                        break
+        _, _, region = find_view3d_context(context)
         
         was_in_camera = (region and region.view_perspective == 'CAMERA')
         
@@ -1104,30 +1078,8 @@ def _handle_saved_view_selection(self, context, enum_value: str):
             if not view_dict:
                 return
 
-            # Resolve space and region robustly
-            space = getattr(context, 'space_data', None)
-            region = getattr(context, 'region_data', None)
-
-            # If context is VIEW_3D but region_data is None, get region_3d from space
-            if space and getattr(space, 'type', None) == 'VIEW_3D':
-                if not region and hasattr(space, 'region_3d'):
-                    region = space.region_3d
-            else:
-                # Not in VIEW_3D context, search for one
-                space = None
-                region = None
-                if context.screen:
-                    for area in context.screen.areas:
-                        if area.type == 'VIEW_3D':
-                            # Get the SpaceView3D from this area
-                            for s in area.spaces:
-                                if s.type == 'VIEW_3D':
-                                    space = s
-                                    # Access region_3d which is the RegionView3D
-                                    if hasattr(s, 'region_3d'):
-                                        region = s.region_3d
-                                    break
-                            break
+            # Resolve space and region robustly.
+            _, space, region = find_view3d_context(context)
 
             if not space or not region:
                 return
@@ -1707,36 +1659,8 @@ class ViewPilotProperties(bpy.types.PropertyGroup):
         self._is_reinitializing = True
         
         try:
-            # 1. Resolve Space and Region robustly
-            space = getattr(context, 'space_data', None)
-            region = getattr(context, 'region_data', None)
-            
-            # If current context is not a 3D View, search for one in the screen
-            if not space or space.type != 'VIEW_3D':
-                found_space = None
-                found_region = None
-                
-                # Check current screen areas
-                if context.screen:
-                    for area in context.screen.areas:
-                        if area.type == 'VIEW_3D':
-                            for s in area.spaces:
-                                if s.type == 'VIEW_3D':
-                                    found_space = s
-                                    found_region = s.region_3d
-                                    break
-                        if found_space: break
-                
-                if found_space:
-                    space = found_space
-                    region = found_region
-                else:
-                    return
-
-            # Ensure region is valid
-            if not region and hasattr(space, 'region_3d'):
-                region = space.region_3d
-                
+            # 1. Resolve Space and Region robustly.
+            _, space, region = find_view3d_context(context)
             if not space or not region:
                 return
 
