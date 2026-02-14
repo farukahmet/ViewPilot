@@ -376,9 +376,11 @@ def cleanup_world_fake_users():
 # CAMERA CREATION UTILITY
 # ============================================================================
 
-# Blender's internal viewport sensor reference (2× standard 36mm camera default)
-# See: https://projects.blender.org/blender/blender/issues/114507
-VIEWPORT_SENSOR = 72.0  # mm
+# Viewport uses a 36mm camera model with a 2x zoom-out feel.
+# Keep created cameras at 36mm and bake compensation into projection math.
+CAMERA_SENSOR_MM = 36.0
+VIEWPORT_ZOOM_OUT_FACTOR = 2.0
+VIEWPORT_EFFECTIVE_SENSOR_MM = CAMERA_SENSOR_MM * VIEWPORT_ZOOM_OUT_FACTOR
 
 def create_camera_from_view_data(
     context,
@@ -420,26 +422,29 @@ def create_camera_from_view_data(
     viewport_height = context.region.height if context.region else 1080
     viewport_aspect = viewport_width / viewport_height
     
+    safe_lens = lens if abs(lens) > 1e-6 else 50.0
+
     if is_perspective:
         cam_data.type = 'PERSP'
-        cam_data.lens = lens
+        # Preserve viewport framing while keeping camera sensor at 36mm.
+        cam_data.lens = safe_lens / VIEWPORT_ZOOM_OUT_FACTOR
     else:
         cam_data.type = 'ORTHO'
         # Viewport ortho view_distance is scaled relative to the viewport's lens setting
-        # The relationship is: camera_ortho_scale = view_distance * (72.0 / lens)
-        cam_data.ortho_scale = distance * (VIEWPORT_SENSOR / lens)
+        # The relationship is: camera_ortho_scale = view_distance * (effective_sensor / lens)
+        cam_data.ortho_scale = distance * (VIEWPORT_EFFECTIVE_SENSOR_MM / safe_lens)
     
     # Set sensor fit and dimensions to match viewport aspect ratio
     if viewport_aspect >= 1.0:
         # Landscape: fit to width (horizontal)
         cam_data.sensor_fit = 'HORIZONTAL'
-        cam_data.sensor_width = VIEWPORT_SENSOR
-        cam_data.sensor_height = VIEWPORT_SENSOR / viewport_aspect
+        cam_data.sensor_width = CAMERA_SENSOR_MM
+        cam_data.sensor_height = CAMERA_SENSOR_MM / viewport_aspect
     else:
         # Portrait: fit to height (vertical)
         cam_data.sensor_fit = 'VERTICAL'
-        cam_data.sensor_height = VIEWPORT_SENSOR
-        cam_data.sensor_width = VIEWPORT_SENSOR * viewport_aspect
+        cam_data.sensor_height = CAMERA_SENSOR_MM
+        cam_data.sensor_width = CAMERA_SENSOR_MM * viewport_aspect
     
     # Create camera object
     cam_obj = bpy.data.objects.new(name, cam_data)
@@ -817,3 +822,4 @@ def start_monitor():
     except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError):
         pass
     return None
+
