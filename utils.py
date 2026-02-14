@@ -96,6 +96,29 @@ def find_window_for_area(context, target_area):
     return None
 
 
+def find_view3d_area_at_mouse(context, mouse_x, mouse_y, exclude_area=None):
+    """Find the VIEW_3D area under global mouse coordinates."""
+    wm = getattr(context, "window_manager", None) or getattr(bpy.context, "window_manager", None)
+    if not wm:
+        return None
+
+    for window in wm.windows:
+        screen = window.screen
+        if not screen:
+            continue
+        for area in screen.areas:
+            if area.type != 'VIEW_3D':
+                continue
+            if exclude_area is not None and area == exclude_area:
+                continue
+            if (
+                area.x <= mouse_x < area.x + area.width and
+                area.y <= mouse_y < area.y + area.height
+            ):
+                return area
+    return None
+
+
 def tag_redraw_all_view3d(context=None):
     """Tag redraw on all VIEW_3D areas across all windows."""
     try:

@@ -304,16 +304,12 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
                 VIEW3D_OT_thumbnail_gallery._context_area = None
             else:
                 # Check if mouse is over any other 3D view
-                found_context_area = None
-                for window in bpy.context.window_manager.windows:
-                    for area in window.screen.areas:
-                        if area.type == 'VIEW_3D' and area != primary_area:
-                            if (area.x <= mouse_x < area.x + area.width and
-                                area.y <= mouse_y < area.y + area.height):
-                                found_context_area = area
-                                break
-                    if found_context_area:
-                        break
+                found_context_area = utils.find_view3d_area_at_mouse(
+                    bpy.context,
+                    mouse_x,
+                    mouse_y,
+                    exclude_area=primary_area,
+                )
                 if found_context_area is not None:
                     VIEW3D_OT_thumbnail_gallery._context_area = found_context_area
 
