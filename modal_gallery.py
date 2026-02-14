@@ -545,15 +545,7 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
         self._shader_image = None
         
         # Redraw all 3D views.
-        wm = getattr(context, "window_manager", None) or getattr(bpy.context, "window_manager", None)
-        if wm:
-            for window in wm.windows:
-                screen = window.screen
-                if not screen:
-                    continue
-                for area in screen.areas:
-                    if area.type == 'VIEW_3D':
-                        area.tag_redraw()
+        utils.tag_redraw_all_view3d(context)
     
     def _regenerate_all_thumbnails(self, context):
         """Regenerate thumbnails for all saved views by navigating to each and capturing."""
@@ -1456,14 +1448,8 @@ def _reset_gallery_state():
     except Exception:
         pass
     
-    # Force redraw all 3D views to clear any stale gallery overlay
-    try:
-        for window in bpy.context.window_manager.windows:
-            for area in window.screen.areas:
-                if area.type == 'VIEW_3D':
-                    area.tag_redraw()
-    except Exception:
-        pass
+    # Force redraw all 3D views to clear any stale gallery overlay.
+    utils.tag_redraw_all_view3d(bpy.context)
 
 
 def _auto_start_gallery():

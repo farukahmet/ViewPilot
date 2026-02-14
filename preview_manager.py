@@ -9,7 +9,7 @@ import os
 import bpy
 import bpy.utils.previews
 
-from . import debug_tools
+from . import debug_tools, utils
 from .temp_paths import make_temp_png_path, sanitize_token
 
 # Global storage for preview collections and per-view active preview ids.
@@ -20,6 +20,8 @@ _last_saved_views_signature = ()
 _undo_refresh_queued = False
 _icon_retry_queued = False
 _is_registered = False
+_panel_items_cache = []
+_panel_items_signature = None
 
 
 def _next_preview_id(view_name):
@@ -27,6 +29,19 @@ def _next_preview_id(view_name):
     global _preview_serial
     _preview_serial += 1
     return f"vp_{sanitize_token(view_name)}_{_preview_serial}"
+
+
+def _compute_panel_items_signature(saved_views):
+    """Build a signature for panel icon enum item caching."""
+    view_sig = tuple(
+        (
+            view.get("name", ""),
+            view.get("thumbnail_image", ""),
+        )
+        for view in saved_views
+    )
+    preview_sig = tuple(sorted(_active_preview_ids.items()))
+    return (view_sig, preview_sig)
 
 
 def _compute_saved_views_signature():
@@ -88,17 +103,7 @@ def _request_gallery_refresh():
 
 def _tag_view3d_redraw():
     """Request redraw in all 3D view areas so panel icon updates become visible."""
-    try:
-        wm = bpy.context.window_manager
-        for window in wm.windows:
-            screen = window.screen
-            if not screen:
-                continue
-            for area in screen.areas:
-                if area.type == 'VIEW_3D':
-                    area.tag_redraw()
-    except Exception:
-        pass
+    utils.tag_redraw_all_view3d(bpy.context)
 
 
 def _queue_panel_icon_retry():
@@ -349,6 +354,9 @@ def reload_all_previews(context):
 
 def invalidate_panel_gallery_cache():
     """Invalidate panel icon view state."""
+    global _panel_items_cache, _panel_items_signature
+    _panel_items_cache = []
+    _panel_items_signature = None
     _tag_view3d_redraw()
 
 
@@ -356,10 +364,15 @@ def get_panel_gallery_items(self, context):
     """Generate enum items for panel gallery template_icon_view."""
     from . import data_storage
 
+    global _panel_items_cache, _panel_items_signature
+
     saved_views = data_storage.get_saved_views()
-    # Always rebuild items for panel icon view. Custom preview icon ids may
-    # transition from 0->valid asynchronously, and cache hits can freeze the
-    # panel in a permanent "loading" state.
+    signature = _compute_panel_items_signature(saved_views)
+
+    if _panel_items_signature == signature and _panel_items_cache:
+        debug_tools.inc("enum.panel_gallery.cache_hit")
+        return _panel_items_cache
+
     debug_tools.inc("enum.panel_gallery.items_build")
 
     items = []
@@ -390,6 +403,15 @@ def get_panel_gallery_items(self, context):
 
     if not items:
         items.append(('NONE', "No Views", "No saved views", 0, 0))
+
+    # Only cache stable item lists. Pending icon states can transition
+    # asynchronously, so we rebuild until they settle.
+    if not has_pending_icons:
+        _panel_items_cache = items
+        _panel_items_signature = signature
+    else:
+        _panel_items_cache = []
+        _panel_items_signature = None
 
     if has_pending_icons:
         _queue_panel_icon_retry()
@@ -450,7 +472,7 @@ def on_redo_post(dummy):
 
 def register():
     """Initialize preview collection."""
-    global preview_collections, _is_registered
+    global preview_collections, _is_registered, _panel_items_cache, _panel_items_signature
 
     if _is_registered:
         return
@@ -477,12 +499,14 @@ def register():
     if on_redo_post not in bpy.app.handlers.redo_post:
         bpy.app.handlers.redo_post.append(on_redo_post)
     _mark_saved_views_signature()
+    _panel_items_cache = []
+    _panel_items_signature = None
     _is_registered = True
 
 
 def unregister():
     """Clean up preview collection."""
-    global preview_collections, _preview_serial, _last_saved_views_signature, _undo_refresh_queued, _icon_retry_queued, _is_registered
+    global preview_collections, _preview_serial, _last_saved_views_signature, _undo_refresh_queued, _icon_retry_queued, _is_registered, _panel_items_cache, _panel_items_signature
     
     # Remove handler
     if on_file_load in bpy.app.handlers.load_post:
@@ -506,4 +530,6 @@ def unregister():
     _last_saved_views_signature = ()
     _undo_refresh_queued = False
     _icon_retry_queued = False
+    _panel_items_cache = []
+    _panel_items_signature = None
     _is_registered = False

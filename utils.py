@@ -96,6 +96,24 @@ def find_window_for_area(context, target_area):
     return None
 
 
+def tag_redraw_all_view3d(context=None):
+    """Tag redraw on all VIEW_3D areas across all windows."""
+    try:
+        ctx = context or bpy.context
+        wm = getattr(ctx, "window_manager", None) or getattr(bpy.context, "window_manager", None)
+        if not wm:
+            return
+        for window in wm.windows:
+            screen = window.screen
+            if not screen:
+                continue
+            for area in screen.areas:
+                if area.type == 'VIEW_3D':
+                    area.tag_redraw()
+    except Exception:
+        pass
+
+
 def _resolve_preferred_view3d_area(context, preferred_area):
     """Validate and resolve preferred VIEW_3D area across all open windows."""
     if not preferred_area or preferred_area.type != 'VIEW_3D':

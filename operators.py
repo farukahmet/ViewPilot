@@ -44,7 +44,8 @@ class VIEW3D_OT_view_history_monitor(bpy.types.Operator):
     
     # Settings
     CHECK_INTERVAL = 0.1
-    MAINTENANCE_INTERVAL = 0.5
+    MAINTENANCE_INTERVAL_ACTIVE = 0.5
+    MAINTENANCE_INTERVAL_IDLE = 2.0
 
     def _pass_through_tick(self, tick_start=None):
         if tick_start is not None:
@@ -109,11 +110,35 @@ class VIEW3D_OT_view_history_monitor(bpy.types.Operator):
                 except TypeError:
                     pass  # Enum items not yet populated
 
+    def _current_maintenance_interval(self, context):
+        """Return maintenance cadence based on current activity level."""
+        try:
+            props = context.scene.viewpilot
+            if (
+                self.is_moving or
+                self.was_in_camera_view or
+                props.orbit_around_selection or
+                props.keep_camera_active
+            ):
+                return self.MAINTENANCE_INTERVAL_ACTIVE
+        except Exception:
+            pass
+        return self.MAINTENANCE_INTERVAL_IDLE
+
     def _maybe_run_periodic_maintenance(self, context, now):
-        if (now - self.last_maintenance_time) < self.MAINTENANCE_INTERVAL:
+        interval = self._current_maintenance_interval(context)
+        if (now - self.last_maintenance_time) < interval:
             debug_tools.inc("history.monitor.maintenance.skipped")
+            if interval == self.MAINTENANCE_INTERVAL_ACTIVE:
+                debug_tools.inc("history.monitor.maintenance.skipped.active")
+            else:
+                debug_tools.inc("history.monitor.maintenance.skipped.idle")
             return
         debug_tools.inc("history.monitor.maintenance.run")
+        if interval == self.MAINTENANCE_INTERVAL_ACTIVE:
+            debug_tools.inc("history.monitor.maintenance.run.active")
+        else:
+            debug_tools.inc("history.monitor.maintenance.run.idle")
         self.last_maintenance_time = now
         with debug_tools.timed("history.monitor.maintenance.total"):
             self._run_periodic_maintenance(context)
@@ -249,12 +274,11 @@ class VIEW3D_OT_view_history_monitor(bpy.types.Operator):
                         context.scene.viewpilot.last_active_view_index = context.scene.saved_views_index
                         context.scene.saved_views_index = -1
                         try:
-                            controller.skip_enum_load = True
-                            context.scene.viewpilot.saved_views_enum = 'NONE'
-                            _set_panel_gallery_enum_safe(context, 'NONE')
-                            controller.skip_enum_load = False
+                            with _suppress_saved_view_enum_load():
+                                context.scene.viewpilot.saved_views_enum = 'NONE'
+                                _set_panel_gallery_enum_safe(context, 'NONE')
                         except Exception:
-                            controller.skip_enum_load = False
+                            pass
                 else:
                     # We are in a grace period.
                     
@@ -267,12 +291,11 @@ class VIEW3D_OT_view_history_monitor(bpy.types.Operator):
                              context.scene.viewpilot.last_active_view_index = context.scene.saved_views_index
                              context.scene.saved_views_index = -1
                              try:
-                                 controller.skip_enum_load = True
-                                 context.scene.viewpilot.saved_views_enum = 'NONE'
-                                 _set_panel_gallery_enum_safe(context, 'NONE')
-                                 controller.skip_enum_load = False
+                                 with _suppress_saved_view_enum_load():
+                                     context.scene.viewpilot.saved_views_enum = 'NONE'
+                                     _set_panel_gallery_enum_safe(context, 'NONE')
                              except Exception:
-                                 controller.skip_enum_load = False
+                                 pass
 
                     # If this is due to VIEW_RESTORE (loading a view), we should accept this new state
                     # as the baseline immediately to prevent "Ghost View" triggering once grace ends.
