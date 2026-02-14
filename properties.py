@@ -305,9 +305,9 @@ def update_orbit_mode_toggle(self, context):
                     props['rot_y'] = euler.y
                     props['rot_z'] = euler.z
                     
-                    # Reset zoom and pan - orbit mode activated
-                    props.invalidate_zoom_state(eye_pos)
+                    # Rebase pan/zoom for orbit mode without forcing visible slider jumps.
                     props.invalidate_pan_state(eye_pos, euler, disable_mode=True)
+                    props.invalidate_zoom_state(eye_pos, rot, preserve_value=True)
                     
                     # Mark as ready
                     props['orbit_initialized'] = True
@@ -486,6 +486,10 @@ def update_orbit_transform(self, context):
             context.scene.camera.rotation_euler = new_euler
         else:
             set_view_location(context, new_pos, new_euler)
+
+        # Keep zoom continuity after orbit changes by rebasing its hidden base
+        # while preserving the current zoom slider value.
+        self.invalidate_zoom_state(new_pos, new_quat, preserve_value=True)
     finally:
         controller.end_update()
 
@@ -547,8 +551,8 @@ def update_zoom_level(self, context):
                 self['loc_y'] = new_pos.y
                 self['loc_z'] = new_pos.z
                 
-                # Update orbit state - zoom changed position
-                self.invalidate_orbit_state(new_pos, rot_quat)
+                # Update orbit base while preserving current orbit slider values.
+                self.invalidate_orbit_state(new_pos, rot_quat, preserve_slider_values=True)
             else:
                 # Viewport mode: dolly exactly like camera mode - move eye along forward axis
                 # This gives unlimited zoom range with consistent linear feel
@@ -588,8 +592,8 @@ def update_zoom_level(self, context):
                     self['loc_y'] = new_eye.y
                     self['loc_z'] = new_eye.z
                     
-                    # Update orbit state - zoom changed position
-                    self.invalidate_orbit_state(new_eye, rot_quat)
+                    # Update orbit base while preserving current orbit slider values.
+                    self.invalidate_orbit_state(new_eye, rot_quat, preserve_slider_values=True)
     finally:
         controller.end_update()
 
@@ -735,6 +739,12 @@ def update_lens_clip(self, context):
                     # Reset pan values for new ortho position
                     if self.use_screen_space:
                         self.invalidate_pan_state(current_eye)
+                    # Keep orbit continuity for orthographic scale changes.
+                    self.invalidate_orbit_state(
+                        current_eye,
+                        region.view_rotation,
+                        preserve_slider_values=True
+                    )
     finally:
         controller.end_update()
 
@@ -1535,11 +1545,21 @@ class ViewPilotProperties(bpy.types.PropertyGroup):
     # changes. Instead of scattering resets throughout update functions, call
     # the appropriate invalidation method.
     
-    def invalidate_zoom_state(self, new_pos):
-        """Reset dolly zoom to work from new position.
+    def invalidate_zoom_state(self, new_pos, new_rot_quat=None, preserve_value=False):
+        """Rebase dolly zoom after position changes.
         
         Call when: Position changes from any source except zoom itself.
+        Args:
+            new_rot_quat: Quaternion rotation (required when preserve_value=True).
+            preserve_value: Keep current zoom slider value and shift the hidden
+                base reference so only future deltas are applied.
         """
+        if preserve_value and new_rot_quat is not None:
+            forward = new_rot_quat @ Vector((0.0, 0.0, -1.0))
+            base_pos = new_pos - (forward * self.zoom_level)
+            self['base_world_pos'] = (base_pos.x, base_pos.y, base_pos.z)
+            return
+        
         self['base_world_pos'] = (new_pos.x, new_pos.y, new_pos.z)
         self['zoom_level'] = 0.0
     
@@ -1564,17 +1584,47 @@ class ViewPilotProperties(bpy.types.PropertyGroup):
                 self['base_rotation'] = (new_rot.x, new_rot.y, new_rot.z)
             self['screen_rotation'] = 0.0
     
-    def invalidate_orbit_state(self, new_pos, new_rot_quat=None, disable_mode=False):
+    def _resolve_orbit_axis_for_rebase(self, epsilon=0.0001):
+        """Resolve active orbit axis for continuity rebasing.
+        
+        Returns:
+            "pitch" | "yaw" | "roll" when a single axis is active,
+            "" when all sliders are approximately zero,
+            None when multiple axes are non-zero (ambiguous state).
+        """
+        pitch_nonzero = abs(self.orbit_pitch) > epsilon
+        yaw_nonzero = abs(self.orbit_yaw) > epsilon
+        roll_nonzero = abs(self.screen_rotation) > epsilon
+        
+        nonzero_axes = []
+        if pitch_nonzero:
+            nonzero_axes.append("pitch")
+        if yaw_nonzero:
+            nonzero_axes.append("yaw")
+        if roll_nonzero:
+            nonzero_axes.append("roll")
+        
+        if not nonzero_axes:
+            return ""
+        if len(nonzero_axes) > 1:
+            return None
+        return nonzero_axes[0]
+    
+    def invalidate_orbit_state(
+        self,
+        new_pos,
+        new_rot_quat=None,
+        disable_mode=False,
+        preserve_slider_values=False
+    ):
         """Update orbit base to work from new position.
         
         Call when: Position changes from any source except orbit itself.
         Args:
             new_rot_quat: Quaternion rotation (optional, for recalculating base)
             disable_mode: If True, completely disable orbit mode.
-        
-        Note: This does NOT reset the pitch/yaw sliders. The sliders are only
-        reset by the mutual exclusion logic in update_orbit_transform or
-        via explicit reset button clicks.
+            preserve_slider_values: Keep current orbit slider values and
+                back-solve the base so only future deltas are applied.
         """
         if disable_mode:
             self['orbit_around_selection'] = False
@@ -1584,17 +1634,55 @@ class ViewPilotProperties(bpy.types.PropertyGroup):
         # Only update base if orbit is currently active and initialized
         if self.orbit_around_selection and self.orbit_initialized:
             center = Vector(self.orbit_center)
-            base_offset = new_pos - center
+            current_offset = new_pos - center
+            base_offset = current_offset
+            base_quat = new_rot_quat if new_rot_quat is not None else None
+            
+            if preserve_slider_values and new_rot_quat is not None:
+                pose_quat = new_rot_quat.normalized()
+                axis = self._resolve_orbit_axis_for_rebase()
+                
+                if axis is None:
+                    # Ambiguous multi-axis state: safest fallback is to commit
+                    # current pose and clear orbit sliders.
+                    self['orbit_pitch'] = 0.0
+                    self['orbit_yaw'] = 0.0
+                    self['screen_rotation'] = 0.0
+                    self['orbit_active_axis'] = ""
+                    base_offset = current_offset
+                    base_quat = pose_quat
+                elif axis == "pitch":
+                    pitch_val = self.orbit_pitch
+                    axis_world = pose_quat @ Vector((1.0, 0.0, 0.0))
+                    delta_rot = Quaternion(axis_world, -pitch_val)
+                    delta_inv = delta_rot.inverted()
+                    base_offset = delta_inv @ current_offset
+                    base_quat = delta_inv @ pose_quat
+                    self['orbit_active_axis'] = "pitch"
+                elif axis == "yaw":
+                    yaw_val = self.orbit_yaw
+                    axis_world = pose_quat @ Vector((0.0, 1.0, 0.0))
+                    delta_rot = Quaternion(axis_world, -yaw_val)
+                    delta_inv = delta_rot.inverted()
+                    base_offset = delta_inv @ current_offset
+                    base_quat = delta_inv @ pose_quat
+                    self['orbit_active_axis'] = "yaw"
+                elif axis == "roll":
+                    roll_val = self.screen_rotation
+                    roll_quat = Quaternion((0.0, 0.0, 1.0), roll_val)
+                    base_offset = current_offset
+                    base_quat = pose_quat @ roll_quat.inverted()
+                    self['orbit_active_axis'] = "roll"
+                else:
+                    base_offset = current_offset
+                    base_quat = pose_quat
+                    self['orbit_active_axis'] = ""
+            
             self['orbit_base_offset'] = (base_offset.x, base_offset.y, base_offset.z)
             self['orbit_distance'] = base_offset.length
             
-            if new_rot_quat:
-                self['orbit_base_rotation'] = (new_rot_quat.w, new_rot_quat.x, new_rot_quat.y, new_rot_quat.z)
-            
-            # NOTE: We do NOT reset orbit_pitch/orbit_yaw here.
-            # The sliders are managed by the mutual exclusion logic in update_orbit_transform.
-            # Resetting them here would cause a race condition where the sliders
-            # unexpectedly jump to zero during normal operation.
+            if base_quat is not None:
+                self['orbit_base_rotation'] = (base_quat.w, base_quat.x, base_quat.y, base_quat.z)
     
     def invalidate_all_relative_state(self, new_pos, new_rot=None, new_rot_quat=None):
         """Reset ALL relative state when absolute position changes.

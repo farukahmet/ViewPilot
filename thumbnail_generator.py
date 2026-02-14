@@ -169,12 +169,9 @@ class ThumbnailRenderer:
             orig_image_view_settings_state.get("look")
             if orig_image_view_settings_state else None
         )
-        orig_linear_colorspace = None
-        if hasattr(image_settings, "linear_colorspace_settings"):
-            try:
-                orig_linear_colorspace = image_settings.linear_colorspace_settings.name
-            except Exception:
-                orig_linear_colorspace = None
+        # Avoid touching image_settings.linear_colorspace_settings.name here.
+        # On some Blender builds this can emit RNA warnings when the current
+        # value is transient/invalid, and we don't need it for thumbnail output.
         orig_use_multiview = getattr(context.scene.render, "use_multiview", None)
         orig_views_format = getattr(context.scene.render, "views_format", None)
 
@@ -518,11 +515,6 @@ class ThumbnailRenderer:
                     orig_image_look,
                     "restore image_settings.view_settings.look",
                 )
-            if orig_linear_colorspace and hasattr(image_settings, "linear_colorspace_settings"):
-                try:
-                    image_settings.linear_colorspace_settings.name = orig_linear_colorspace
-                except Exception:
-                    pass
             
             # Cleanup temp file
             try:
