@@ -1094,15 +1094,16 @@ class VIEW3D_OT_delete_saved_view(bpy.types.Operator):
         # Delete associated thumbnail
         delete_thumbnail(view_name)
 
-        # Capture current active index before deletion so we can remap it.
-        active_before = context.scene.saved_views_index
-
         # Pre-clear dynamic enum selections so they never reference a soon-to-be
         # invalid index while sync_to_all_scenes updates the backing collection.
         with _suppress_saved_view_enum_load():
             context.scene.saved_views_index = -1
+            context.scene.viewpilot.last_active_view_index = -1
             context.scene.viewpilot.saved_views_enum = 'NONE'
-            _set_panel_gallery_enum_safe(context, 'NONE')
+            try:
+                context.scene.viewpilot.panel_gallery_enum = 'NONE'
+            except (TypeError, ValueError, RuntimeError, AttributeError):
+                pass
         
         # Remove the view from JSON storage (auto-syncs to PropertyGroup)
         if not data_storage.delete_saved_view(index):
@@ -1112,31 +1113,17 @@ class VIEW3D_OT_delete_saved_view(bpy.types.Operator):
         # Invalidate dropdown/panel caches and refresh gallery after index shift.
         _refresh_saved_views_ui()
         
-        # Remap active selection to a valid post-delete index.
-        remaining = len(data_storage.get_saved_views())
-        if remaining <= 0:
-            new_active = -1
-        else:
-            # If deleted view was active, select the next valid slot.
-            if active_before == index:
-                new_active = min(index, remaining - 1)
-            # If active was after deleted index, shift left by one.
-            elif active_before > index:
-                new_active = active_before - 1
-            else:
-                new_active = active_before
-            new_active = max(0, min(new_active, remaining - 1))
-
-        # Keep both enums synchronized to a valid identifier to avoid stale
-        # dynamic enum values after index shifts.
+        # Deletion intentionally leaves the addon in "no view selected" state.
+        # This avoids implying we're on another saved view when viewport state
+        # has not been loaded from it.
         with _suppress_saved_view_enum_load():
-            context.scene.saved_views_index = new_active
-            if new_active >= 0:
-                enum_value = str(new_active)
-                _sync_saved_view_enums_safe(context, enum_value)
-            else:
-                context.scene.viewpilot.saved_views_enum = 'NONE'
-                _set_panel_gallery_enum_safe(context, 'NONE')
+            context.scene.saved_views_index = -1
+            context.scene.viewpilot.last_active_view_index = -1
+            context.scene.viewpilot.saved_views_enum = 'NONE'
+            try:
+                context.scene.viewpilot.panel_gallery_enum = 'NONE'
+            except (TypeError, ValueError, RuntimeError, AttributeError):
+                pass
         
         self.report({'INFO'}, f"Deleted view: {view_name}")
         

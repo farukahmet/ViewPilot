@@ -320,11 +320,11 @@ def draw_viewpilot_controls(layout, context, location='popup'):
             
             # Right column: selected view's Remember states
             col_remember = split.column()
-            
+
             # Get selected view
             selected_idx = context.scene.saved_views_index
             ghost_idx = props.last_active_view_index
-            
+
             # Determine which view to show (selected or ghost)
             display_idx = selected_idx if selected_idx >= 0 else ghost_idx
             is_ghost = selected_idx < 0 and ghost_idx >= 0
