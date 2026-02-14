@@ -19,6 +19,7 @@ import glob
 import os
 import traceback
 
+from . import utils
 from .temp_paths import make_temp_png_path
 
 
@@ -667,49 +668,16 @@ class ThumbnailRenderer:
             pass
     
     def _find_view3d_context(self, context):
-        """Find a valid VIEW_3D area, space, and WINDOW region.
-        
-        Priority: 1) context.area if it's a VIEW_3D,
-                  2) Gallery's _context_area (for topbar/non-3D contexts),
-                  3) First VIEW_3D on screen.
-        """
+        """Find a valid VIEW_3D area, space, and WINDOW region."""
         try:
-            if context is None:
-                return None, None, None
-            
-            # Priority 1: context.area if it's already a VIEW_3D
-            if context.area and context.area.type == 'VIEW_3D':
-                area = context.area
-                space = context.space_data
-                for reg in area.regions:
-                    if reg.type == 'WINDOW':
-                        return area, space, reg
-            
-            # Priority 2: Gallery's tracked context_area (for topbar, etc.)
+            preferred_area = None
             try:
                 from .modal_gallery import VIEW3D_OT_thumbnail_gallery
-                gallery_area = VIEW3D_OT_thumbnail_gallery._context_area
-                if gallery_area and gallery_area.type == 'VIEW_3D':
-                    # Verify it's still valid
-                    for window in bpy.context.window_manager.windows:
-                        for area in window.screen.areas:
-                            if area == gallery_area:
-                                space = area.spaces.active
-                                for reg in area.regions:
-                                    if reg.type == 'WINDOW':
-                                        return area, space, reg
-            except:
-                pass
-            
-            # Priority 3: Fall back to first VIEW_3D on screen
-            if context.screen:
-                for area in context.screen.areas:
-                    if area.type == 'VIEW_3D':
-                        space = area.spaces.active
-                        for reg in area.regions:
-                            if reg.type == 'WINDOW':
-                                return area, space, reg
-            return None, None, None
+                preferred_area = VIEW3D_OT_thumbnail_gallery._context_area
+            except Exception:
+                preferred_area = None
+
+            return utils.find_view3d_override_context(context, preferred_area=preferred_area)
         except Exception as e:
             print(f"[ViewPilot] Error finding 3D view context: {e}")
             return None, None, None

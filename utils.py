@@ -26,25 +26,150 @@ monitor_running = False       # Prevents multiple monitor instances
 # VIEW_3D CONTEXT UTILITIES
 # ============================================================================
 
-def find_view3d_context(context):
+def _get_view3d_space_region(area):
+    """Return (space, region_3d) for a VIEW_3D area, else (None, None)."""
+    if not area or area.type != 'VIEW_3D':
+        return (None, None)
+    for space in area.spaces:
+        if space.type == 'VIEW_3D':
+            region = getattr(space, "region_3d", None)
+            if region:
+                return (space, region)
+    return (None, None)
+
+
+def _get_view3d_window_region(area):
+    """Return WINDOW region for a VIEW_3D area, else None."""
+    if not area or area.type != 'VIEW_3D':
+        return None
+    for region in area.regions:
+        if region.type == 'WINDOW':
+            return region
+    return None
+
+
+def _find_view3d_area_for_space(context, target_space):
+    """Resolve VIEW_3D area containing target space across all windows/screens."""
+    if not target_space:
+        return None
+
+    wm = getattr(context, "window_manager", None) or getattr(bpy.context, "window_manager", None)
+    if wm:
+        for window in wm.windows:
+            screen = window.screen
+            if not screen:
+                continue
+            for area in screen.areas:
+                if area.type != 'VIEW_3D':
+                    continue
+                for space in area.spaces:
+                    if space == target_space:
+                        return area
+
+    if context.screen:
+        for area in context.screen.areas:
+            if area.type != 'VIEW_3D':
+                continue
+            for space in area.spaces:
+                if space == target_space:
+                    return area
+
+    return None
+
+
+def _resolve_preferred_view3d_area(context, preferred_area):
+    """Validate and resolve preferred VIEW_3D area across all open windows."""
+    if not preferred_area or preferred_area.type != 'VIEW_3D':
+        return None
+
+    wm = getattr(context, "window_manager", None) or getattr(bpy.context, "window_manager", None)
+    if wm:
+        for window in wm.windows:
+            screen = window.screen
+            if not screen:
+                continue
+            for area in screen.areas:
+                if area == preferred_area and area.type == 'VIEW_3D':
+                    return area
+
+    if context.screen:
+        for area in context.screen.areas:
+            if area == preferred_area and area.type == 'VIEW_3D':
+                return area
+
+    return None
+
+
+def find_view3d_context(context, preferred_area=None):
     """
     Find VIEW_3D area, space, and region from any context.
+    
+    Optionally tries a preferred VIEW_3D area first (for cross-area workflows
+    like modal gallery actions invoked from non-VIEW_3D regions).
     
     Useful when operating from non-3D contexts (TOPBAR, timers, etc.)
     Returns (area, space, region_3d) tuple, or (None, None, None) if not found.
     """
+    # Preferred area first (if provided and still valid)
+    area = _resolve_preferred_view3d_area(context, preferred_area)
+    if area:
+        space, region = _get_view3d_space_region(area)
+        if space and region:
+            return (area, space, region)
+
     # Direct context first (fastest path)
     if context.space_data and context.space_data.type == 'VIEW_3D':
-        return (context.area, context.space_data, context.region_data)
+        area = context.area if context.area and context.area.type == 'VIEW_3D' else None
+        region = context.region_data or getattr(context.space_data, "region_3d", None)
+        if region:
+            return (area, context.space_data, region)
     
     # Fall back to searching screen
     if context.screen:
         for area in context.screen.areas:
             if area.type == 'VIEW_3D':
-                for space in area.spaces:
-                    if space.type == 'VIEW_3D':
-                        return (area, space, space.region_3d)
+                space, region = _get_view3d_space_region(area)
+                if space and region:
+                    return (area, space, region)
+
+    # Last resort: scan all windows/screens.
+    wm = getattr(context, "window_manager", None) or getattr(bpy.context, "window_manager", None)
+    if wm:
+        for window in wm.windows:
+            screen = window.screen
+            if not screen:
+                continue
+            for area in screen.areas:
+                if area.type == 'VIEW_3D':
+                    space, region = _get_view3d_space_region(area)
+                    if space and region:
+                        return (area, space, region)
+
     return (None, None, None)
+
+
+def find_view3d_override_context(context, preferred_area=None):
+    """
+    Find VIEW_3D area/space/WINDOW-region tuple for temp overrides.
+
+    This wraps find_view3d_context() and converts region_3d lookup to the
+    corresponding WINDOW region required by context.temp_override().
+    """
+    area, space, region_3d = find_view3d_context(context, preferred_area=preferred_area)
+    if not space or not region_3d:
+        return (None, None, None)
+
+    if not area and context.area and context.area.type == 'VIEW_3D':
+        area = context.area
+    if not area:
+        area = _find_view3d_area_for_space(context, space)
+    if not area:
+        return (None, None, None)
+
+    window_region = _get_view3d_window_region(area)
+    if not window_region:
+        return (None, None, None)
+    return (area, space, window_region)
 
 
 # ============================================================================

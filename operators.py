@@ -906,41 +906,8 @@ class VIEW3D_OT_save_current_view(bpy.types.Operator):
     def execute(self, context):
         from . import data_storage
         
-        # Get the 3D View space and region
-        # Priority: 1) Direct context, 2) Gallery's context_area, 3) First VIEW_3D
-        space = None
-        region = None
-        target_area = None
-        
-        if context.space_data and context.space_data.type == 'VIEW_3D':
-            space = context.space_data
-            region = context.region_data
-        else:
-            # Try gallery's tracked context area first (last in-focus 3D view)
-            gallery_area = VIEW3D_OT_thumbnail_gallery._context_area
-            if gallery_area:
-                # Verify it's still valid
-                for window in context.window_manager.windows:
-                    for area in window.screen.areas:
-                        if area == gallery_area and area.type == 'VIEW_3D':
-                            target_area = area
-                            break
-                    if target_area:
-                        break
-            
-            # Fall back to first VIEW_3D area
-            if not target_area:
-                for area in context.screen.areas:
-                    if area.type == 'VIEW_3D':
-                        target_area = area
-                        break
-            
-            if target_area:
-                space = target_area.spaces.active
-                for r in target_area.regions:
-                    if r.type == 'WINDOW':
-                        region = space.region_3d
-                        break
+        preferred_area = VIEW3D_OT_thumbnail_gallery._context_area
+        _, space, region = utils.find_view3d_context(context, preferred_area=preferred_area)
         
         if not space or not region:
             self.report({'ERROR'}, "No 3D View found")
@@ -1195,41 +1162,8 @@ class VIEW3D_OT_update_saved_view(bpy.types.Operator):
     def execute(self, context):
         from . import data_storage
         
-        # Get the 3D View space and region
-        # Priority: 1) Direct context, 2) Gallery's context_area, 3) First VIEW_3D
-        space = None
-        region = None
-        target_area = None
-        
-        if context.space_data and context.space_data.type == 'VIEW_3D':
-            space = context.space_data
-            region = context.region_data
-        else:
-            # Try gallery's tracked context area first (last in-focus 3D view)
-            gallery_area = VIEW3D_OT_thumbnail_gallery._context_area
-            if gallery_area:
-                # Verify it's still valid
-                for window in context.window_manager.windows:
-                    for area in window.screen.areas:
-                        if area == gallery_area and area.type == 'VIEW_3D':
-                            target_area = area
-                            break
-                    if target_area:
-                        break
-            
-            # Fall back to first VIEW_3D area
-            if not target_area:
-                for area in context.screen.areas:
-                    if area.type == 'VIEW_3D':
-                        target_area = area
-                        break
-            
-            if target_area:
-                space = target_area.spaces.active
-                for r in target_area.regions:
-                    if r.type == 'WINDOW':
-                        region = space.region_3d
-                        break
+        preferred_area = VIEW3D_OT_thumbnail_gallery._context_area
+        _, space, region = utils.find_view3d_context(context, preferred_area=preferred_area)
         
         if not space or not region:
             self.report({'ERROR'}, "No 3D View found")
