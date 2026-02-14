@@ -313,7 +313,7 @@ def _mark_parse_error(text: bpy.types.Text, content: str, error: Exception) -> N
     if content and content.strip():
         try:
             backup_name = _create_corrupt_backup(content)
-        except Exception as backup_error:
+        except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError, OSError) as backup_error:
             if not _STORAGE_PARSE_ERROR_REPORTED:
                 print(f"[ViewPilot] ERROR Failed to back up malformed JSON: {backup_error}")
 
@@ -369,7 +369,7 @@ def force_reset_storage() -> bool:
         _save_raw_data(text, _get_empty_data())
         _clear_parse_error_state()
         return True
-    except Exception as error:
+    except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError, OSError) as error:
         print(f"[ViewPilot] ERROR Failed to reset storage: {error}")
         return False
 
@@ -388,7 +388,7 @@ def _load_raw_data(text: bpy.types.Text) -> Dict[str, Any]:
     except json.JSONDecodeError as error:
         _mark_parse_error(text, content, error)
         return _get_empty_data()
-    except Exception as error:
+    except (TypeError, ValueError, RuntimeError, AttributeError, RecursionError) as error:
         _mark_parse_error(text, content, error)
         return _get_empty_data()
 
@@ -979,7 +979,7 @@ def sync_to_all_scenes() -> int:
             controller = get_controller()
             prev_skip_enum_load = controller.skip_enum_load
             controller.skip_enum_load = True
-        except Exception:
+        except (ImportError, AttributeError, TypeError, ValueError, RuntimeError):
             controller = None
         
         try:
@@ -997,12 +997,12 @@ def sync_to_all_scenes() -> int:
                 # 10 views exist) cannot survive sync and trigger enum warnings.
                 try:
                     raw_index = int(getattr(scene, "saved_views_index", -1))
-                except Exception:
+                except (TypeError, ValueError, RuntimeError, AttributeError):
                     raw_index = -1
                 clamped_index = raw_index if 0 <= raw_index < view_count else -1
                 try:
                     scene.saved_views_index = clamped_index
-                except Exception:
+                except (TypeError, ValueError, RuntimeError, AttributeError):
                     pass
 
                 # Keep enum properties aligned with clamped indices.
@@ -1013,7 +1013,7 @@ def sync_to_all_scenes() -> int:
                             props.saved_views_enum = str(clamped_index)
                         else:
                             props.saved_views_enum = 'NONE'
-                    except Exception:
+                    except (TypeError, ValueError, RuntimeError, AttributeError):
                         pass
 
                     if view_count > 0:
@@ -1023,12 +1023,12 @@ def sync_to_all_scenes() -> int:
                             panel_index = ghost_idx if 0 <= ghost_idx < view_count else 0
                         try:
                             props.panel_gallery_enum = str(panel_index)
-                        except Exception:
+                        except (TypeError, ValueError, RuntimeError, AttributeError):
                             pass
                     else:
                         try:
                             props.panel_gallery_enum = 'NONE'
-                        except Exception:
+                        except (TypeError, ValueError, RuntimeError, AttributeError):
                             pass
         finally:
             if controller is not None:

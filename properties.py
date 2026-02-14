@@ -211,19 +211,19 @@ def update_orbit_mode_toggle(self, context):
                                 for obj in selected_before:
                                     try:
                                         obj.select_set(False)
-                                    except Exception:
+                                    except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError):
                                         pass
                                 for obj in frame_targets:
                                     try:
                                         obj.select_set(True)
-                                    except Exception:
+                                    except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError):
                                         pass
                                 try:
                                     if active_before in frame_targets:
                                         context.view_layer.objects.active = active_before
                                     else:
                                         context.view_layer.objects.active = frame_targets[0]
-                                except Exception:
+                                except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError):
                                     pass
 
                                 with bpy.context.temp_override(**override_kwargs):
@@ -233,23 +233,23 @@ def update_orbit_mode_toggle(self, context):
                                     if obj not in selected_before:
                                         try:
                                             obj.select_set(False)
-                                        except Exception:
+                                        except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError):
                                             pass
                                 for obj in selected_before:
                                     try:
                                         obj.select_set(True)
-                                    except Exception:
+                                    except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError):
                                         pass
                                 try:
                                     context.view_layer.objects.active = active_before
-                                except Exception:
+                                except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError):
                                     pass
                         else:
                             # Fallback: no geometry/instancer objects available to frame.
                             with bpy.context.temp_override(**override_kwargs):
                                 bpy.ops.view3d.view_all('INVOKE_DEFAULT')
-                    except Exception as e:
-                        print(f"[ViewPilot] Framing failed: {e}")
+                    except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError) as e:
+                        debug_tools.log(f"framing failed: {e}")
             
             # 4. Start grace period
             controller.start_grace_period(0.5)
@@ -307,7 +307,7 @@ def update_orbit_mode_toggle(self, context):
                         _, _, region_3d = find_view3d_context(bpy.context)
                         
                         if not region_3d:
-                            print("[ViewPilot] Could not find 3D view for orbit init")
+                            debug_tools.log("could not find 3D view for orbit init")
                             return None
                         
                         # Get framed camera position
@@ -352,10 +352,10 @@ def update_orbit_mode_toggle(self, context):
                     
                     # Mark as ready
                     props['orbit_initialized'] = True
-                    print(f"[ViewPilot] Orbit initialized: offset={base_offset}, dist={dist:.2f}")
+                    debug_tools.log(f"orbit initialized: offset={base_offset}, dist={dist:.2f}")
                     
-                except Exception as e:
-                    print(f"[ViewPilot] Delayed orbit init failed: {e}")
+                except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError, ZeroDivisionError) as e:
+                    debug_tools.log(f"delayed orbit init failed: {e}")
                 
                 return None  # Don't repeat timer
             
@@ -991,7 +991,7 @@ def get_saved_views_items(self, context):
                     last_view_name = saved_views[last_idx].get("name", "View")
                     # Safely format with asterisks (Unicode-safe)
                     none_label = f"*{last_view_name}*"
-            except Exception:
+            except (TypeError, ValueError, IndexError, AttributeError, RuntimeError):
                 pass
 
     try:
@@ -1027,10 +1027,7 @@ get_saved_views_items._building = False
 
 def invalidate_saved_views_enum_cache():
     """Invalidate cached items for saved views EnumProperty."""
-    try:
-        get_saved_views_items._cached_items = []
-    except Exception:
-        pass
+    get_saved_views_items._cached_items = []
 
 
 def invalidate_saved_views_ui_caches():
@@ -1039,7 +1036,7 @@ def invalidate_saved_views_ui_caches():
     try:
         from .preview_manager import invalidate_panel_gallery_cache
         invalidate_panel_gallery_cache()
-    except Exception:
+    except (ImportError, AttributeError, RuntimeError, ValueError):
         pass
 
 
@@ -1061,7 +1058,7 @@ def _set_panel_gallery_enum_safe(self, preferred_value=None):
         if scene and hasattr(scene, "saved_views"):
             view_count = len(scene.saved_views)
             current_idx = int(getattr(scene, "saved_views_index", -1))
-    except Exception:
+    except (TypeError, ValueError, AttributeError, RuntimeError):
         view_count = 0
         current_idx = -1
 
@@ -1091,7 +1088,7 @@ def _set_panel_gallery_enum_safe(self, preferred_value=None):
             try:
                 self.panel_gallery_enum = candidate
                 return True
-            except Exception:
+            except (TypeError, ValueError, RuntimeError, AttributeError):
                 continue
         return False
     finally:
@@ -1105,7 +1102,7 @@ def _sync_saved_view_selection_enums(self, controller, enum_value: str):
         controller.skip_enum_load = True
         try:
             self.saved_views_enum = enum_value
-        except Exception:
+        except (TypeError, ValueError, RuntimeError, AttributeError):
             pass
         # Normalize panel enum without reading current value first. Reading an
         # already-invalid enum can emit RNA warnings before we can fix it.
@@ -1291,8 +1288,8 @@ def _sync_view_to_json(view_item, context, prop_name):
             data = data_storage.load_data()
             data["saved_views"] = views
             data_storage.save_data(data)
-    except Exception as e:
-        print(f"[ViewPilot] Failed to sync {prop_name} to JSON: {e}")
+    except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError) as e:
+        debug_tools.log(f"failed to sync '{prop_name}' to JSON: {e}")
 
 
 # ============================================================================
@@ -1550,7 +1547,7 @@ class ViewPilotProperties(bpy.types.PropertyGroup):
         try:
             from .preview_manager import get_panel_gallery_items
             return get_panel_gallery_items(self, context)
-        except Exception:
+        except (ImportError, AttributeError, TypeError, ValueError, RuntimeError):
             return [('NONE', "No Views", "", 0, 0)]
     
     panel_gallery_enum: bpy.props.EnumProperty(
@@ -1766,7 +1763,7 @@ class ViewPilotProperties(bpy.types.PropertyGroup):
                     else:
                         _set_panel_gallery_enum_safe(self, 'NONE')
                 controller.skip_enum_load = False
-            except Exception:
+            except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError):
                 if 'controller' in locals():
                     controller.skip_enum_load = False
             
@@ -1808,7 +1805,7 @@ class ViewPilotProperties(bpy.types.PropertyGroup):
                 try:
                     from .preferences import get_preferences
                     self.use_fov = get_preferences().default_lens_unit == 'FOV'
-                except Exception:
+                except (ImportError, AttributeError, TypeError, ValueError, RuntimeError):
                     self.use_fov = True  # Default to FOV
                 
                 if self.is_perspective:

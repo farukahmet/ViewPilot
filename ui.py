@@ -34,7 +34,7 @@ def draw_viewpilot_controls(layout, context, location='popup'):
         show_history = prefs.section_show_history if not in_camera_mode else prefs.section_show_history_cam
         show_saved_views = prefs.section_show_saved_views if not in_camera_mode else prefs.section_show_saved_views_cam
         show_viewport_display = prefs.section_show_overlays_cam if in_camera_mode else False
-    except Exception:
+    except (ImportError, AttributeError, TypeError, ValueError, RuntimeError):
         show_lens = True
         show_transform = True
         show_history = True
@@ -436,7 +436,7 @@ class VIEW3D_PT_viewpilot_npanel(bpy.types.Panel):
         """Only show if enabled in preferences."""
         try:
             return get_preferences().show_n_panel
-        except Exception:
+        except (ImportError, AttributeError, TypeError, ValueError, RuntimeError):
             return False
     
     def draw(self, context):
@@ -455,7 +455,7 @@ def draw_header_button(self, context):
         prefs = get_preferences()
         if not prefs.show_header_button:
             return
-    except Exception:
+    except (ImportError, AttributeError, TypeError, ValueError, RuntimeError):
         pass
     
     self.layout.popover(
@@ -480,7 +480,7 @@ def draw_topbar_saved_views(self, context):
         prefs = get_preferences()
         if not prefs.show_topbar_saved_views:
             return
-    except Exception:
+    except (ImportError, AttributeError, TypeError, ValueError, RuntimeError):
         pass
     
     # Ensure at least one resolvable 3D view exists for these actions.

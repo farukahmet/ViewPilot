@@ -676,7 +676,7 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
                         # Refresh region reference after scene switch
                         space = context.space_data
                         region = space.region_3d if space else None
-                except Exception as restore_err:
+                except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError) as restore_err:
                     debug_tools.log(f"error restoring scene after thumbnail regeneration: {restore_err}")
                 
                 # Restore viewport state
@@ -691,13 +691,13 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
                             region.view_perspective = 'PERSP'
                         else:
                             region.view_perspective = 'ORTHO'
-                    except Exception as restore_err:
+                    except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError) as restore_err:
                         debug_tools.log(f"error restoring viewport state after thumbnail regeneration: {restore_err}")
                 
                 if space:
                     try:
                         space.lens = original_lens
-                    except Exception as restore_err:
+                    except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError) as restore_err:
                         debug_tools.log(f"error restoring lens after thumbnail regeneration: {restore_err}")
                 
                 # Restore original view layer
@@ -705,14 +705,14 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
                     if original_view_layer and original_view_layer.name in [vl.name for vl in context.window.scene.view_layers]:
                         if context.window.view_layer != original_view_layer:
                             context.window.view_layer = original_view_layer
-                except Exception as restore_err:
+                except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError) as restore_err:
                     debug_tools.log(f"error restoring view layer after thumbnail regeneration: {restore_err}")
                 
                 # Restore saved views index and world
                 try:
                     context.scene.saved_views_index = original_index
                     context.scene.world = original_world
-                except Exception as restore_err:
+                except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError) as restore_err:
                     debug_tools.log(f"error restoring index/world after thumbnail regeneration: {restore_err}")
                 
                 # Reset enum property to match the index
@@ -742,9 +742,10 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
             # Reload textures after regeneration
             self._load_textures(context)
             debug_tools.log(f"regenerated {len(views)} thumbnails")
-        except Exception as e:
+        except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError, OSError) as e:
             import traceback
-            print(f"[ViewPilot] Error regenerating thumbnails: {e}")
+            self.report({'ERROR'}, "Error regenerating thumbnails (see console)")
+            debug_tools.log(f"error regenerating thumbnails: {e}")
             traceback.print_exc()
     
     def _load_textures(self, context):
@@ -800,10 +801,10 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
                             # Clean up temp file
                             try:
                                 os.remove(temp_path)
-                            except Exception:
+                            except OSError:
                                 pass
                             
-                    except Exception as e:
+                    except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError, OSError) as e:
                         debug_tools.log(f"failed to load texture for '{view_dict.get('name', 'View')}': {e}")
                 else:
                     debug_tools.log(f"image not found for gallery texture load: {thumb_name}")
@@ -1175,7 +1176,7 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
             # Clamp to minimum 0.2 (slider shows 0-1 for visual alignment with other sliders)
             size_factor = max(0.2, prefs.preview_size_factor)
             backdrop_opacity = prefs.preview_backdrop_opacity
-        except Exception:
+        except (ImportError, AttributeError, TypeError, ValueError, RuntimeError):
             size_factor = 0.5
             backdrop_opacity = 0.5
         
@@ -1406,7 +1407,7 @@ def _reset_gallery_state():
     if _backup_draw_handler is not None:
         try:
             bpy.types.SpaceView3D.draw_handler_remove(_backup_draw_handler, 'WINDOW')
-        except Exception:
+        except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError):
             pass
         _backup_draw_handler = None
     
@@ -1417,10 +1418,10 @@ def _reset_gallery_state():
                 bpy.types.SpaceView3D.draw_handler_remove(
                     VIEW3D_OT_thumbnail_gallery._draw_handler, 'WINDOW'
                 )
-            except Exception:
+            except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError):
                 pass
             VIEW3D_OT_thumbnail_gallery._draw_handler = None
-    except Exception:
+    except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError):
         pass
     
     # Reset all class-level state
@@ -1430,7 +1431,7 @@ def _reset_gallery_state():
             if callable(free_fn):
                 try:
                     free_fn()
-                except Exception:
+                except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError):
                     pass
         VIEW3D_OT_thumbnail_gallery._is_active = False
         VIEW3D_OT_thumbnail_gallery._instance = None
@@ -1439,7 +1440,7 @@ def _reset_gallery_state():
         VIEW3D_OT_thumbnail_gallery._context_area = None
         VIEW3D_OT_thumbnail_gallery._context_menu_index = -1
         VIEW3D_OT_thumbnail_gallery._textures.clear()
-    except Exception:
+    except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError):
         pass
 
     # Clean up any stale temp display images.
@@ -1447,7 +1448,7 @@ def _reset_gallery_state():
         for img in list(bpy.data.images):
             if img.name.startswith(".VP_Display_"):
                 bpy.data.images.remove(img)
-    except Exception:
+    except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError):
         pass
     
     # Force redraw all 3D views to clear any stale gallery overlay.
@@ -1466,7 +1467,7 @@ def _auto_start_gallery():
         try:
             with bpy.context.temp_override(window=window, area=area, region=region):
                 bpy.ops.view3d.thumbnail_gallery('INVOKE_DEFAULT')
-        except Exception as e:
+        except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError) as e:
             debug_tools.log(f"failed to auto-start gallery: {e}")
     return None  # Unregister timer
 
@@ -1479,7 +1480,7 @@ def _on_load_post(dummy):
         from .preferences import get_preferences
         if not get_preferences().start_gallery_on_load:
             return
-    except Exception:
+    except (ImportError, AttributeError, TypeError, ValueError, RuntimeError):
         return  # Don't auto-start if we can't read preference (safer default)
     # Auto-enable gallery after a short delay to ensure context is ready
     bpy.app.timers.register(_auto_start_gallery, first_interval=0.5)
@@ -1662,7 +1663,7 @@ class VIEW3D_OT_gallery_view_to_camera(bpy.types.Operator):
             collection_name = prefs.camera_collection_name
             collection_color = prefs.camera_collection_color
             camera_name_prefix = prefs.camera_name_prefix
-        except Exception:
+        except (ImportError, AttributeError, TypeError, ValueError, RuntimeError):
             passepartout = 0.95
             show_passepartout = True
             show_name = True
@@ -1726,7 +1727,7 @@ def register():
         from .preferences import get_preferences
         if get_preferences().start_gallery_on_load:
             bpy.app.timers.register(_auto_start_gallery, first_interval=0.5)
-    except Exception:
+    except (ImportError, AttributeError, TypeError, ValueError, RuntimeError):
         pass
 
 

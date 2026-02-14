@@ -23,7 +23,7 @@ _enabled_guard = False
 def _get_prefs():
     try:
         return bpy.context.preferences.addons[__package__].preferences
-    except Exception:
+    except (AttributeError, KeyError, TypeError, RuntimeError):
         return None
 
 

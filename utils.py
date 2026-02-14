@@ -133,7 +133,7 @@ def tag_redraw_all_view3d(context=None):
             for area in screen.areas:
                 if area.type == 'VIEW_3D':
                     area.tag_redraw()
-    except Exception:
+    except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError):
         pass
 
 
@@ -318,7 +318,7 @@ def get_orbit_focus_view_layer_objects(context):
         try:
             if not obj.visible_get(view_layer=view_layer):
                 continue
-        except Exception:
+        except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError):
             if getattr(obj, "hide_viewport", False):
                 continue
         objects.append(obj)
@@ -368,7 +368,7 @@ def cleanup_world_fake_users():
         for world in bpy.data.worlds:
             if world.name not in used_worlds and world.use_fake_user:
                 world.use_fake_user = False
-    except Exception as e:
+    except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError) as e:
         print(f"[ViewPilot] Error cleaning up World fake users: {e}")
 
 
@@ -544,7 +544,7 @@ def get_current_view_state(context):
             'clip_end': space.clip_end,
             'timestamp': time.time()
         }
-    except Exception as e:
+    except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError) as e:
         print(f"Error getting view state: {e}")
     return None
 
@@ -588,7 +588,7 @@ def restore_view_state(context, state):
         
         return True
         
-    except Exception as e:
+    except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError, KeyError) as e:
         print(f"Error restoring view state: {e}")
         return False
 
@@ -646,7 +646,7 @@ def add_to_history(state):
     try:
         from .preferences import get_preferences
         max_size = get_preferences().history_max_size
-    except Exception:
+    except (ImportError, AttributeError, TypeError, ValueError, RuntimeError):
         max_size = 20
     if len(view_history) > max_size:
         view_history.pop(0)
@@ -693,7 +693,7 @@ def _reset_orbit_sliders_after_history(context, state):
         props['orbit_base_rotation'] = (view_rot.w, view_rot.x, view_rot.y, view_rot.z)
         props['orbit_distance'] = base_offset.length
         
-    except Exception as e:
+    except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError, KeyError) as e:
         print(f"[ViewPilot] Failed to reset orbit after history: {e}")
 
 
@@ -799,7 +799,7 @@ def reset_history_handler(dummy):
             synced = data_storage.sync_to_all_scenes()
             if synced > 0:
                 print(f"[ViewPilot] Synced {synced} views to PropertyGroup")
-    except Exception as e:
+    except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError, OSError) as e:
         print(f"[ViewPilot] Data storage init failed: {e}")
     
     # Restart the monitor because loading a file kills modal operators
@@ -814,6 +814,6 @@ def start_monitor():
         return None  # Already running
     try:
         bpy.ops.view3d.view_history_monitor('INVOKE_DEFAULT')
-    except Exception:
+    except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError):
         pass
     return None

@@ -24,6 +24,53 @@ _panel_items_cache = []
 _panel_items_signature = None
 
 
+def _remove_handler_variants(handler_list, handler, include_current=False):
+    """Remove stale handler variants by function identity/name/module.
+
+    Blender reloads can leave old function objects in handler lists; matching on
+    name+module avoids duplicate callbacks without requiring exact identity.
+    """
+    removed = 0
+    target_name = getattr(handler, "__name__", "")
+    target_module = getattr(handler, "__module__", "")
+
+    for existing in list(handler_list):
+        is_current = existing is handler
+        same_symbol = (
+            is_current or (
+                getattr(existing, "__name__", "") == target_name and
+                getattr(existing, "__module__", "") == target_module
+            )
+        )
+        if not same_symbol:
+            continue
+        if is_current and not include_current:
+            continue
+        try:
+            handler_list.remove(existing)
+            removed += 1
+        except (RuntimeError, ValueError, AttributeError):
+            pass
+    return removed
+
+
+def _unregister_reload_operator_variants(include_current=False):
+    """Unregister stale reload operator class variants after hot reload."""
+    class_name = VIEWPILOT_OT_reload_previews.__name__
+    registered_cls = getattr(bpy.types, class_name, None)
+    if not registered_cls:
+        return 0
+
+    if registered_cls is VIEWPILOT_OT_reload_previews and not include_current:
+        return 0
+
+    try:
+        bpy.utils.unregister_class(registered_cls)
+        return 1
+    except (RuntimeError, ValueError, AttributeError):
+        return 0
+
+
 def _next_preview_id(view_name):
     """Generate a unique preview id for incremental replacement."""
     global _preview_serial
@@ -50,7 +97,7 @@ def _compute_saved_views_signature():
 
     try:
         views = data_storage.get_saved_views()
-    except Exception:
+    except (RuntimeError, ReferenceError, AttributeError, ValueError):
         return ()
 
     signature = []
@@ -72,7 +119,8 @@ def _preview_cache_out_of_sync(signature):
 
     try:
         pcoll = get_preview_collection()
-    except Exception:
+    except (RuntimeError, ReferenceError, AttributeError, ValueError) as error:
+        debug_tools.log(f"preview cache sync check failed: {error}")
         return True
 
     for view_name in expected_names:
@@ -97,7 +145,7 @@ def _request_gallery_refresh():
 
         if VIEW3D_OT_thumbnail_gallery._is_active:
             VIEW3D_OT_thumbnail_gallery.request_refresh()
-    except Exception:
+    except (ImportError, RuntimeError, ReferenceError, AttributeError):
         pass
 
 
@@ -141,7 +189,7 @@ def _queue_undo_refresh(reason):
                 reload_all_previews(context)
                 _request_gallery_refresh()
                 debug_tools.log(f"undo/redo preview refresh applied ({reason})")
-        except Exception as e:
+        except (RuntimeError, ReferenceError, AttributeError, ValueError) as e:
             debug_tools.log(f"undo/redo preview refresh failed ({reason}): {e}")
         finally:
             _mark_saved_views_signature()
@@ -159,7 +207,7 @@ def _write_preview_temp_file(image, view_name):
         image.save_render(temp_path)
         if os.path.exists(temp_path):
             return temp_path
-    except Exception as e:
+    except (RuntimeError, OSError, AttributeError, ReferenceError, ValueError) as e:
         debug_tools.log(f"preview temp export failed for '{view_name}': {e}")
     
     # Fallback path: direct image save. This avoids cases where save_render()
@@ -172,13 +220,13 @@ def _write_preview_temp_file(image, view_name):
         image.save()
         if os.path.exists(temp_path):
             return temp_path
-    except Exception as e:
+    except (RuntimeError, OSError, AttributeError, ReferenceError, ValueError) as e:
         debug_tools.log(f"preview temp direct save failed for '{view_name}': {e}")
     finally:
         try:
             image.filepath_raw = orig_filepath_raw
             image.file_format = orig_file_format
-        except Exception:
+        except (RuntimeError, AttributeError, ReferenceError, ValueError):
             pass
     
     return None
@@ -204,7 +252,7 @@ def load_view_preview(view_name, thumbnail_path, replace_existing=True):
         if old_id and old_id in pcoll:
             try:
                 del pcoll[old_id]
-            except Exception:
+            except (RuntimeError, KeyError, AttributeError, ValueError):
                 # Some Blender versions don't reliably support entry deletion.
                 pass
 
@@ -222,8 +270,8 @@ def load_view_preview(view_name, thumbnail_path, replace_existing=True):
         if not icon_id:
             _queue_panel_icon_retry()
         return icon_id
-    except Exception as e:
-        print(f"[ViewPilot] Could not load preview for {view_name}: {e}")
+    except (RuntimeError, OSError, AttributeError, ReferenceError, ValueError) as e:
+        debug_tools.log(f"could not load preview for '{view_name}': {e}")
         return 0
 
 
@@ -266,8 +314,8 @@ def _resolve_thumbnail_image_name(view_name):
             thumb_name = view_dict.get("thumbnail_image", "")
             if thumb_name and bpy.data.images.get(thumb_name):
                 return thumb_name
-    except Exception:
-        pass
+    except (RuntimeError, ReferenceError, AttributeError, ValueError) as error:
+        debug_tools.log(f"thumbnail image name resolve failed for '{view_name}': {error}")
 
     return direct_name
 
@@ -286,7 +334,7 @@ def _get_image_preview_icon_id(image_name):
         if preview:
             icon_id = getattr(preview, "icon_id", 0) or 0
             return icon_id
-    except Exception:
+    except (RuntimeError, ReferenceError, AttributeError, ValueError):
         pass
     return 0
 
@@ -441,8 +489,8 @@ def on_file_load(dummy):
             if context and hasattr(context, 'scene') and context.scene:
                 reload_all_previews(context)
                 _request_gallery_refresh()
-        except Exception:
-            pass
+        except (RuntimeError, ReferenceError, AttributeError, ValueError) as error:
+            debug_tools.log(f"load_post preview reload failed: {error}")
         finally:
             _mark_saved_views_signature()
         return None  # Don't repeat
@@ -477,18 +525,24 @@ def register():
     if _is_registered:
         return
 
+    # Remove stale handlers from prior module instances before adding current.
+    _remove_handler_variants(bpy.app.handlers.load_post, on_file_load, include_current=False)
+    _remove_handler_variants(bpy.app.handlers.undo_post, on_undo_post, include_current=False)
+    _remove_handler_variants(bpy.app.handlers.redo_post, on_redo_post, include_current=False)
+
     if "viewpilot_previews" in preview_collections:
         try:
             bpy.utils.previews.remove(preview_collections["viewpilot_previews"])
-        except Exception:
-            pass
+        except (RuntimeError, ReferenceError, ValueError, AttributeError) as error:
+            debug_tools.log(f"preview collection removal before register failed: {error}")
         preview_collections.pop("viewpilot_previews", None)
 
     preview_collections["viewpilot_previews"] = bpy.utils.previews.new()
 
+    _unregister_reload_operator_variants(include_current=True)
     try:
         bpy.utils.register_class(VIEWPILOT_OT_reload_previews)
-    except Exception:
+    except (RuntimeError, ValueError):
         # Already registered from a non-ideal reload path.
         pass
 
@@ -508,22 +562,19 @@ def unregister():
     """Clean up preview collection."""
     global preview_collections, _preview_serial, _last_saved_views_signature, _undo_refresh_queued, _icon_retry_queued, _is_registered, _panel_items_cache, _panel_items_signature
     
-    # Remove handler
-    if on_file_load in bpy.app.handlers.load_post:
-        bpy.app.handlers.load_post.remove(on_file_load)
-    if on_undo_post in bpy.app.handlers.undo_post:
-        bpy.app.handlers.undo_post.remove(on_undo_post)
-    if on_redo_post in bpy.app.handlers.redo_post:
-        bpy.app.handlers.redo_post.remove(on_redo_post)
+    # Remove handlers (current + stale variants from prior reloads).
+    _remove_handler_variants(bpy.app.handlers.load_post, on_file_load, include_current=True)
+    _remove_handler_variants(bpy.app.handlers.undo_post, on_undo_post, include_current=True)
+    _remove_handler_variants(bpy.app.handlers.redo_post, on_redo_post, include_current=True)
     
-    try:
-        bpy.utils.unregister_class(VIEWPILOT_OT_reload_previews)
-    except Exception:
-        # Class may already be unregistered in non-ideal reload paths.
-        pass
+    # Remove class (current + stale variant).
+    _unregister_reload_operator_variants(include_current=True)
     
-    for pcoll in preview_collections.values():
-        bpy.utils.previews.remove(pcoll)
+    for pcoll in list(preview_collections.values()):
+        try:
+            bpy.utils.previews.remove(pcoll)
+        except (RuntimeError, ReferenceError, ValueError, AttributeError):
+            pass
     preview_collections.clear()
     _active_preview_ids.clear()
     _preview_serial = 0

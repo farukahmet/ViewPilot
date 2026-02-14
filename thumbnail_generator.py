@@ -125,7 +125,7 @@ class ThumbnailRenderer:
                 if hasattr(saved_view, 'shading_selected_world') and saved_view.shading_selected_world:
                     if saved_view.shading_selected_world in bpy.data.worlds:
                         context.scene.world = bpy.data.worlds[saved_view.shading_selected_world]
-            except Exception as e:
+            except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError) as e:
                 debug_tools.log(f"could not apply saved shading: {e}")
         
         # Detect Cycles RENDERED mode (can't capture - use SOLID fallback)
@@ -211,7 +211,7 @@ class ThumbnailRenderer:
             if hasattr(context.scene.render, "use_multiview"):
                 try:
                     context.scene.render.use_multiview = False
-                except Exception:
+                except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError):
                     pass
 
             if hasattr(context.scene.render, "views_format"):
@@ -219,7 +219,7 @@ class ThumbnailRenderer:
                 if "INDIVIDUAL" in views_ids:
                     try:
                         context.scene.render.views_format = "INDIVIDUAL"
-                    except Exception:
+                    except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError):
                         pass
 
             if hasattr(image_settings, "media_type"):
@@ -227,7 +227,7 @@ class ThumbnailRenderer:
                 if "IMAGE" in media_ids:
                     try:
                         image_settings.media_type = "IMAGE"
-                    except Exception:
+                    except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError):
                         pass
 
             # Avoid output-level color-management override affecting thumbnail
@@ -236,7 +236,7 @@ class ThumbnailRenderer:
             if "FOLLOW_SCENE" in color_mgmt_ids:
                 try:
                     image_settings.color_management = "FOLLOW_SCENE"
-                except Exception:
+                except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError):
                     pass
 
             format_ids = self._enum_ids(image_settings, "file_format")
@@ -338,7 +338,7 @@ class ThumbnailRenderer:
                 return image_name
             return None
             
-        except Exception as e:
+        except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError, OSError) as e:
             print(f"[ViewPilot] OpenGL render error: {e}")
             traceback.print_exc()
             return None
@@ -362,7 +362,7 @@ class ThumbnailRenderer:
                 overlay.show_annotation = orig_show_annotation
                 overlay.show_outline_selected = orig_show_outline_selected
                 overlay.show_relationship_lines = orig_show_relationship_lines
-            except Exception:
+            except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError):
                 pass
 
             # Restore all shading settings
@@ -450,19 +450,19 @@ class ThumbnailRenderer:
                 context.scene.render.resolution_y = orig_res_y
                 context.scene.render.resolution_percentage = orig_res_percent
                 context.scene.render.filepath = orig_filepath
-            except Exception:
+            except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError):
                 pass
             if orig_use_multiview is not None and hasattr(context.scene.render, "use_multiview"):
                 try:
                     context.scene.render.use_multiview = orig_use_multiview
-                except Exception:
+                except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError):
                     pass
             if orig_views_format is not None and hasattr(context.scene.render, "views_format"):
                 views_ids = self._enum_ids(context.scene.render, "views_format")
                 if orig_views_format in views_ids:
                     try:
                         context.scene.render.views_format = orig_views_format
-                    except Exception:
+                    except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError):
                         pass
             image_settings = context.scene.render.image_settings
             self._restore_rna_scalars(
@@ -523,7 +523,7 @@ class ThumbnailRenderer:
                     os.remove(output_filepath)
                 if os.path.exists(temp_filepath) and temp_filepath != output_filepath:
                     os.remove(temp_filepath)
-            except Exception:
+            except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError, OSError):
                 pass
 
     def _enum_ids(self, rna_owner, prop_name):
@@ -548,9 +548,9 @@ class ThumbnailRenderer:
                     continue
                 try:
                     state[prop_name] = getattr(rna_owner, prop_name)
-                except Exception:
+                except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError):
                     pass
-        except Exception:
+        except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError):
             pass
         return state
 
@@ -622,14 +622,14 @@ class ThumbnailRenderer:
                 for point in curve.points:
                     try:
                         handle_type = getattr(point, "handle_type", None)
-                    except Exception:
+                    except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError):
                         handle_type = None
                     points.append(
                         (float(point.location[0]), float(point.location[1]), handle_type)
                     )
                 curves_data.append(points)
             return curves_data
-        except Exception:
+        except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError):
             return None
 
     def _restore_curve_mapping(self, view_settings, snapshot, debug_prefix=""):
@@ -658,14 +658,14 @@ class ThumbnailRenderer:
                     if handle_type:
                         try:
                             point.handle_type = handle_type
-                        except Exception:
+                        except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError):
                             pass
 
             try:
                 cm.update()
-            except Exception:
+            except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError):
                 pass
-        except Exception:
+        except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError):
             pass
     
     def _find_view3d_context(self, context):
@@ -675,11 +675,11 @@ class ThumbnailRenderer:
             try:
                 from .modal_gallery import VIEW3D_OT_thumbnail_gallery
                 preferred_area = VIEW3D_OT_thumbnail_gallery._context_area
-            except Exception:
+            except (ImportError, AttributeError, TypeError, ValueError, RuntimeError):
                 preferred_area = None
 
             return utils.find_view3d_override_context(context, preferred_area=preferred_area)
-        except Exception as e:
+        except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError) as e:
             debug_tools.log(f"error finding 3D view context: {e}")
             return None, None, None
     
@@ -712,12 +712,12 @@ class ThumbnailRenderer:
             # Pack so it persists with .blend file.
             try:
                 img.pack()
-            except Exception as e_pack:
+            except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError, OSError) as e_pack:
                 print(f"[ViewPilot] Thumbnail pack failed ({image_name}): {e_pack}")
                 return False
 
             return True
-        except Exception as e:
+        except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError, OSError) as e:
             print(f"[ViewPilot] Error loading thumbnail from file: {e}")
             return False
 
@@ -748,7 +748,7 @@ def generate_thumbnail(context, saved_view, name_suffix=None, refresh_preview=Tr
         try:
             from .preview_manager import refresh_view_preview
             refresh_view_preview(name_suffix)
-        except Exception:
+        except (ImportError, AttributeError, TypeError, ValueError, RuntimeError):
             pass  # Panel gallery refresh is optional
     
     return result
@@ -765,5 +765,5 @@ def delete_thumbnail(view_name):
     try:
         from .preview_manager import remove_view_preview
         remove_view_preview(view_name)
-    except Exception:
+    except (ImportError, AttributeError, TypeError, ValueError, RuntimeError):
         pass

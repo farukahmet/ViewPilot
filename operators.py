@@ -265,8 +265,8 @@ class VIEW3D_OT_view_history_monitor(bpy.types.Operator):
                 if not in_grace:
                     try:
                         context.scene.viewpilot.reinitialize_from_context(context)
-                    except Exception:
-                        pass
+                    except (RuntimeError, ReferenceError, AttributeError, ValueError) as error:
+                        debug_tools.log(f"monitor reinitialize failed outside grace period: {error}")
 
                     # Detected movement away from the current state.
                     # If we are currently "on" a saved view, mark it as ghost (last active) and reset current index
@@ -277,8 +277,8 @@ class VIEW3D_OT_view_history_monitor(bpy.types.Operator):
                             with _suppress_saved_view_enum_load():
                                 context.scene.viewpilot.saved_views_enum = 'NONE'
                                 _set_panel_gallery_enum_safe(context, 'NONE')
-                        except Exception:
-                            pass
+                        except (TypeError, ValueError, RuntimeError, AttributeError) as error:
+                            debug_tools.log(f"monitor ghost-mode enum clear failed: {error}")
                 else:
                     # We are in a grace period.
                     
@@ -294,8 +294,8 @@ class VIEW3D_OT_view_history_monitor(bpy.types.Operator):
                                  with _suppress_saved_view_enum_load():
                                      context.scene.viewpilot.saved_views_enum = 'NONE'
                                      _set_panel_gallery_enum_safe(context, 'NONE')
-                             except Exception:
-                                 pass
+                             except (TypeError, ValueError, RuntimeError, AttributeError) as error:
+                                 debug_tools.log(f"monitor USER_DRAG enum clear failed: {error}")
 
                     # If this is due to VIEW_RESTORE (loading a view), we should accept this new state
                     # as the baseline immediately to prevent "Ghost View" triggering once grace ends.
@@ -345,7 +345,7 @@ class VIEW3D_OT_view_history_monitor(bpy.types.Operator):
                 # No movement, but we were moving recently. Check settle timer.
                 try:
                     settle_delay = get_preferences().settle_delay
-                except Exception:
+                except (AttributeError, RuntimeError, ValueError):
                     settle_delay = 0.3
                 if (now - self.settle_start_time) > settle_delay:
                     # Check if we should record this to history
@@ -380,14 +380,14 @@ class VIEW3D_OT_view_history_monitor(bpy.types.Operator):
         self.last_maintenance_time = 0.0
         self._timer = context.window_manager.event_timer_add(self.CHECK_INTERVAL, window=context.window)
         context.window_manager.modal_handler_add(self)
-        print("[View History] Monitor Started")
+        debug_tools.log("view history monitor started")
         return {'RUNNING_MODAL'}
     
     def cancel(self, context):
         utils.monitor_running = False
         if self._timer:
             context.window_manager.event_timer_remove(self._timer)
-        print("[View History] Monitor Stopped")
+        debug_tools.log("view history monitor stopped")
 
 
 class VIEW3D_OT_view_history_back(bpy.types.Operator):
@@ -411,7 +411,7 @@ class VIEW3D_OT_view_history_back(bpy.types.Operator):
             # Sync UI properties to new view state
             try:
                 context.scene.viewpilot.reinitialize_from_context(context)
-            except Exception as e:
+            except (RuntimeError, ReferenceError, AttributeError, ValueError) as e:
                 debug_tools.log(f"error syncing ViewPilot properties: {e}")
             return {'FINISHED'}
         else:
@@ -443,7 +443,7 @@ class VIEW3D_OT_view_history_forward(bpy.types.Operator):
             # Sync UI properties to new view state
             try:
                 context.scene.viewpilot.reinitialize_from_context(context)
-            except Exception as e:
+            except (RuntimeError, ReferenceError, AttributeError, ValueError) as e:
                 debug_tools.log(f"error syncing ViewPilot properties: {e}")
             return {'FINISHED'}
         else:
@@ -469,7 +469,7 @@ class VIEW3D_OT_sync_viewpilot(bpy.types.Operator):
             context.scene.viewpilot.reinitialize_from_context(context)
             self.report({'INFO'}, "ViewPilot Synced")
             return {'FINISHED'}
-        except Exception as e:
+        except (RuntimeError, ReferenceError, AttributeError, ValueError) as e:
             self.report({'ERROR'}, f"Sync failed: {str(e)}")
             return {'CANCELLED'}
 
@@ -580,8 +580,8 @@ class VIEW3D_OT_exit_camera_view(bpy.types.Operator):
         # Sync UI properties immediately
         try:
             context.scene.viewpilot.reinitialize_from_context(context)
-        except Exception:
-            pass
+        except (RuntimeError, ReferenceError, AttributeError, ValueError) as error:
+            debug_tools.log(f"exit_camera_view reinitialize failed: {error}")
         
         return {'FINISHED'}
 
@@ -614,7 +614,7 @@ class VIEW3D_OT_create_camera_from_view(bpy.types.Operator):
             camera_name_prefix = prefs.camera_name_prefix
             collection_name = prefs.camera_collection_name
             collection_color = prefs.camera_collection_color
-        except Exception:
+        except (AttributeError, RuntimeError, ValueError):
             passepartout = 0.95
             show_passepartout = True
             show_name = True
@@ -847,10 +847,11 @@ def _handle_storage_invalid(context, reporter, action_label="save view"):
     try:
         bpy.ops.viewpilot.recover_storage_overwrite('INVOKE_DEFAULT', action_label=action_label)
     except RuntimeError as error:
-        print(f"[ViewPilot] Failed to show recovery dialog: {error}")
-    except Exception as error:
+        reporter.report({'WARNING'}, "Recovery dialog unavailable (see console)")
+        debug_tools.log(f"failed to show recovery dialog (runtime): {error}")
+    except (TypeError, AttributeError, ValueError) as error:
+        reporter.report({'WARNING'}, "Recovery dialog unavailable (see console)")
         debug_tools.log(f"unexpected error showing recovery dialog: {error}")
-        print(f"[ViewPilot] Failed to show recovery dialog: {error}")
 
 
 def _refresh_saved_views_ui(include_modal_gallery=True):
@@ -858,11 +859,13 @@ def _refresh_saved_views_ui(include_modal_gallery=True):
     try:
         from .properties import invalidate_saved_views_ui_caches
         invalidate_saved_views_ui_caches()
-    except Exception:
+    except (ImportError, AttributeError, TypeError, ValueError, RuntimeError) as error:
+        debug_tools.log(f"saved-view UI cache invalidation fallback path: {error}")
         try:
             from .preview_manager import invalidate_panel_gallery_cache
             invalidate_panel_gallery_cache()
-        except Exception:
+        except (ImportError, AttributeError, TypeError, ValueError, RuntimeError) as fallback_error:
+            debug_tools.log(f"panel gallery cache fallback failed: {fallback_error}")
             pass
 
     if include_modal_gallery and VIEW3D_OT_thumbnail_gallery._is_active:
@@ -914,7 +917,7 @@ class VIEWPILOT_OT_recover_storage_overwrite(bpy.types.Operator):
 
         try:
             data_storage.sync_to_all_scenes()
-        except Exception as error:
+        except (RuntimeError, ReferenceError, AttributeError, ValueError) as error:
             debug_tools.log(f"sync_to_all_scenes failed after storage reset: {error}")
 
         _refresh_saved_views_ui()
@@ -961,7 +964,7 @@ class VIEW3D_OT_save_current_view(bpy.types.Operator):
             view_dict["remember_shading"] = prefs.default_remember_shading
             view_dict["remember_overlays"] = prefs.default_remember_overlays
             view_dict["remember_composition"] = prefs.default_remember_composition
-        except Exception:
+        except (AttributeError, RuntimeError, ValueError):
             pass  # Keep defaults from capture_viewport_as_dict
         
         # Add to JSON storage (auto-syncs to PropertyGroup)
@@ -988,17 +991,18 @@ class VIEW3D_OT_save_current_view(bpy.types.Operator):
             # Notify gallery to refresh if open
             if VIEW3D_OT_thumbnail_gallery._is_active:
                 VIEW3D_OT_thumbnail_gallery.request_refresh()
-        except Exception as e:
+        except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError, OSError) as e:
             try:
                 from . import thumbnail_generator as _thumb_mod
                 thumb_module = getattr(_thumb_mod, "__file__", "<unknown>")
                 thumb_version = getattr(_thumb_mod, "THUMBNAIL_RENDERER_VERSION", "<unknown>")
-            except Exception:
+            except (ImportError, AttributeError):
                 thumb_module = "<import-failed>"
                 thumb_version = "<import-failed>"
-            print(
-                f"[ViewPilot] Thumbnail generation failed: {e} "
-                f"(thumb_module={thumb_module}, thumb_version={thumb_version})"
+            self.report({'WARNING'}, "Thumbnail generation failed (see console)")
+            debug_tools.log(
+                "thumbnail generation failed: "
+                f"{e} (thumb_module={thumb_module}, thumb_version={thumb_version})"
             )
             traceback.print_exc()
         
@@ -1215,17 +1219,18 @@ class VIEW3D_OT_update_saved_view(bpy.types.Operator):
             # Notify gallery to refresh if open
             if VIEW3D_OT_thumbnail_gallery._is_active:
                 VIEW3D_OT_thumbnail_gallery.request_refresh()
-        except Exception as e:
+        except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError, OSError) as e:
             try:
                 from . import thumbnail_generator as _thumb_mod
                 thumb_module = getattr(_thumb_mod, "__file__", "<unknown>")
                 thumb_version = getattr(_thumb_mod, "THUMBNAIL_RENDERER_VERSION", "<unknown>")
-            except Exception:
+            except (ImportError, AttributeError):
                 thumb_module = "<import-failed>"
                 thumb_version = "<import-failed>"
-            print(
-                f"[ViewPilot] Thumbnail regeneration failed: {e} "
-                f"(thumb_module={thumb_module}, thumb_version={thumb_version})"
+            self.report({'WARNING'}, "Thumbnail regeneration failed (see console)")
+            debug_tools.log(
+                "thumbnail regeneration failed: "
+                f"{e} (thumb_module={thumb_module}, thumb_version={thumb_version})"
             )
             traceback.print_exc()
         
@@ -1269,7 +1274,7 @@ class VIEW3D_OT_rename_saved_view(bpy.types.Operator):
             from .preferences import get_preferences
             prefs = get_preferences()
             prefix = prefs.camera_name_prefix
-        except Exception:
+        except (ImportError, AttributeError, RuntimeError, ValueError):
             prefix = "ViewCam"
 
         old_cam_name = f"{prefix} [{old_name}]"
@@ -1453,7 +1458,8 @@ class VIEWPILOT_UL_saved_views_reorder(bpy.types.UIList):
             from .preview_manager import get_view_icon_id_fast
             for idx, view in enumerate(views):
                 icon_map[idx] = get_view_icon_id_fast(view.name, view.thumbnail_image)
-        except Exception:
+        except (ImportError, AttributeError, RuntimeError, ReferenceError, ValueError) as error:
+            debug_tools.log(f"reorder list icon map build failed: {error}")
             icon_map = {}
 
         self._icon_cache_signature = signature

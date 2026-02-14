@@ -37,7 +37,7 @@ class VIEW3D_OT_viewport_controls(bpy.types.Operator):
         
         try:
             popup_width = get_preferences().popup_width
-        except Exception:
+        except (ImportError, AttributeError, TypeError, ValueError, RuntimeError):
             popup_width = 300
             
         return context.window_manager.invoke_props_dialog(self, width=popup_width)
@@ -79,7 +79,7 @@ def register():
             "version=",
             getattr(thumbnail_generator, "THUMBNAIL_RENDERER_VERSION", "<unknown>"),
         )
-    except Exception:
+    except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError):
         pass
 
     # Register Preferences
@@ -108,7 +108,7 @@ def register():
                 synced = data_storage.sync_to_all_scenes()
                 if synced > 0:
                     print(f"[ViewPilot] Synced {synced} views to PropertyGroup")
-        except Exception as e:
+        except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError, OSError) as e:
             print(f"[ViewPilot] Deferred init failed: {e}")
         return None  # Don't repeat
     
