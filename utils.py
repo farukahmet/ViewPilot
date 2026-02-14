@@ -77,6 +77,25 @@ def _find_view3d_area_for_space(context, target_space):
     return None
 
 
+def find_window_for_area(context, target_area):
+    """Resolve the Blender window that owns a given area."""
+    if not target_area:
+        return None
+
+    wm = getattr(context, "window_manager", None) or getattr(bpy.context, "window_manager", None)
+    if not wm:
+        return None
+
+    for window in wm.windows:
+        screen = window.screen
+        if not screen:
+            continue
+        for area in screen.areas:
+            if area == target_area:
+                return window
+    return None
+
+
 def _resolve_preferred_view3d_area(context, preferred_area):
     """Validate and resolve preferred VIEW_3D area across all open windows."""
     if not preferred_area or preferred_area.type != 'VIEW_3D':
@@ -412,24 +431,21 @@ def viewpilot_depsgraph_handler(scene, depsgraph):
 def get_current_view_state(context):
     """Capture the complete state of the current 3D View."""
     try:
-        # Find the 3D View area/space
-        for area in context.screen.areas:
-            if area.type == 'VIEW_3D':
-                for space in area.spaces: 
-                    if space.type == 'VIEW_3D':
-                        r3d = space.region_3d
-                        
-                        return {
-                            'view_location': r3d.view_location.copy(),
-                            'view_rotation': r3d.view_rotation.copy(), # Quaternion
-                            'view_distance': r3d.view_distance,
-                            'view_perspective': r3d.view_perspective,  # 'PERSP', 'ORTHO', or 'CAMERA'
-                            'is_perspective': r3d.is_perspective,
-                            'lens': space.lens,
-                            'clip_start': space.clip_start,
-                            'clip_end': space.clip_end,
-                            'timestamp': time.time()
-                        }
+        area, space, r3d = find_view3d_context(context)
+        if not space or not r3d:
+            return None
+
+        return {
+            'view_location': r3d.view_location.copy(),
+            'view_rotation': r3d.view_rotation.copy(), # Quaternion
+            'view_distance': r3d.view_distance,
+            'view_perspective': r3d.view_perspective,  # 'PERSP', 'ORTHO', or 'CAMERA'
+            'is_perspective': r3d.is_perspective,
+            'lens': space.lens,
+            'clip_start': space.clip_start,
+            'clip_end': space.clip_end,
+            'timestamp': time.time()
+        }
     except Exception as e:
         print(f"Error getting view state: {e}")
     return None
@@ -440,20 +456,8 @@ def restore_view_state(context, state):
     try:
         if not state: return False
 
-        # Always search for 3D View space/region (works in any context including timers)
-        space = None
-        region = None
-        target_area = None
-        for area in context.screen.areas:
-            if area.type == 'VIEW_3D':
-                target_area = area
-                for s in area.spaces:
-                    if s.type == 'VIEW_3D':
-                        space = s
-                        region = s.region_3d
-                        break
-                if space:
-                    break
+        # Works in any context including timers.
+        target_area, space, region = find_view3d_context(context)
         
         if not space or not region:
             print("[View History] Could not find 3D View to restore state")

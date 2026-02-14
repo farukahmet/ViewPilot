@@ -12,7 +12,7 @@ import gpu
 from gpu_extras.batch import batch_for_shader
 from mathutils import Vector, Quaternion
 from .temp_paths import make_temp_png_path
-from . import debug_tools
+from . import debug_tools, utils
 
 # Module-level backup of draw handler - survives class reload
 _backup_draw_handler = None
@@ -69,7 +69,8 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
     @classmethod
     def poll(cls, context):
         # Allow enabling from any context (TopBar/Properties) as long as we have a 3D view
-        return any(area.type == 'VIEW_3D' for area in context.screen.areas)
+        _, space, region = utils.find_view3d_context(context)
+        return bool(space and region)
     
     def invoke(self, context, event):
         # If already active, toggle OFF
@@ -80,20 +81,20 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
             return {'CANCELLED'}
         
         # If not in a VIEW_3D area, re-invoke with proper context
-        if context.area.type != 'VIEW_3D':
-            for window in context.window_manager.windows:
-                for area in window.screen.areas:
-                    if area.type == 'VIEW_3D':
-                        region = None
-                        for r in area.regions:
-                            if r.type == 'WINDOW':
-                                region = r
-                                break
-                        if region:
-                            with bpy.context.temp_override(window=window, area=area, region=region):
-                                bpy.ops.view3d.thumbnail_gallery('INVOKE_DEFAULT')
-                            return {'CANCELLED'}  # This invoke is done, the re-invoked one takes over
-            # No 3D view found
+        if not context.area or context.area.type != 'VIEW_3D':
+            preferred_area = (
+                VIEW3D_OT_thumbnail_gallery._context_area
+                or VIEW3D_OT_thumbnail_gallery._primary_area
+            )
+            area, _, region = utils.find_view3d_override_context(
+                context, preferred_area=preferred_area
+            )
+            window = utils.find_window_for_area(context, area)
+            if area and region and window:
+                with bpy.context.temp_override(window=window, area=area, region=region):
+                    bpy.ops.view3d.thumbnail_gallery('INVOKE_DEFAULT')
+                return {'CANCELLED'}  # This invoke is done, the re-invoked one takes over
+            # No 3D view found.
             return {'CANCELLED'}
         
         VIEW3D_OT_thumbnail_gallery._is_active = True
@@ -408,28 +409,18 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
                     if not ctx_area:
                         ctx_area = VIEW3D_OT_thumbnail_gallery._primary_area
                     
-                    if ctx_area:
-                        # Find window containing the context area
-                        for window in bpy.context.window_manager.windows:
-                            for area in window.screen.areas:
-                                if area == ctx_area and area.type == 'VIEW_3D':
-                                    region = None
-                                    for r in area.regions:
-                                        if r.type == 'WINDOW':
-                                            region = r
-                                            break
-                                    if region:
-                                        with bpy.context.temp_override(window=window, area=ctx_area, region=region):
-                                            try:
-                                                bpy.ops.view3d.save_current_view()
-                                            except RuntimeError as error:
-                                                # Save operator may intentionally cancel (e.g. storage invalid).
-                                                # Keep gallery modal loop alive without dumping traceback noise.
-                                                print(f"[ViewPilot] Save from gallery cancelled: {error}")
-                                    break
-                            else:
-                                continue
-                            break
+                    area, _, region = utils.find_view3d_override_context(
+                        context, preferred_area=ctx_area
+                    )
+                    window = utils.find_window_for_area(context, area)
+                    if area and region and window:
+                        with bpy.context.temp_override(window=window, area=area, region=region):
+                            try:
+                                bpy.ops.view3d.save_current_view()
+                            except RuntimeError as error:
+                                # Save operator may intentionally cancel (e.g. storage invalid).
+                                # Keep gallery modal loop alive without dumping traceback noise.
+                                print(f"[ViewPilot] Save from gallery cancelled: {error}")
                     return {'RUNNING_MODAL'}
             
             # Check Thumbnail Click
@@ -508,31 +499,25 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
         primary = VIEW3D_OT_thumbnail_gallery._primary_area
         if not primary:
             return False
-        for window in bpy.context.window_manager.windows:
-            for area in window.screen.areas:
-                if area == primary and area.type == 'VIEW_3D':
-                    return True
-        return False
+        if primary.type != 'VIEW_3D':
+            return False
+        return utils.find_window_for_area(bpy.context, primary) is not None
     
     def _promote_new_primary_area(self, context):
         """Promote the next available 3D view to primary and restart modal."""
-        for window in bpy.context.window_manager.windows:
-            for area in window.screen.areas:
-                if area.type == 'VIEW_3D':
-                    # Find region
-                    region = None
-                    for r in area.regions:
-                        if r.type == 'WINDOW':
-                            region = r
-                            break
-                    if region:
-                        VIEW3D_OT_thumbnail_gallery._primary_area = area
-                        VIEW3D_OT_thumbnail_gallery._primary_region = region
-                        # Restart modal in new context to fix event handling
-                        VIEW3D_OT_thumbnail_gallery._is_active = False
-                        with bpy.context.temp_override(window=window, area=area, region=region):
-                            bpy.ops.view3d.thumbnail_gallery('INVOKE_DEFAULT')
-                        return
+        preferred_area = VIEW3D_OT_thumbnail_gallery._context_area
+        area, _, region = utils.find_view3d_override_context(
+            context, preferred_area=preferred_area
+        )
+        window = utils.find_window_for_area(context, area)
+        if area and region and window:
+            VIEW3D_OT_thumbnail_gallery._primary_area = area
+            VIEW3D_OT_thumbnail_gallery._primary_region = region
+            # Restart modal in new context to fix event handling
+            VIEW3D_OT_thumbnail_gallery._is_active = False
+            with bpy.context.temp_override(window=window, area=area, region=region):
+                bpy.ops.view3d.thumbnail_gallery('INVOKE_DEFAULT')
+            return
         # No 3D views left, cleanup
         self._cleanup(context)
     
@@ -554,10 +539,16 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
         self._shader_uniform = None
         self._shader_image = None
         
-        # Redraw all 3D views
-        for area in context.screen.areas:
-            if area.type == 'VIEW_3D':
-                area.tag_redraw()
+        # Redraw all 3D views.
+        wm = getattr(context, "window_manager", None) or getattr(bpy.context, "window_manager", None)
+        if wm:
+            for window in wm.windows:
+                screen = window.screen
+                if not screen:
+                    continue
+                for area in screen.areas:
+                    if area.type == 'VIEW_3D':
+                        area.tag_redraw()
     
     def _regenerate_all_thumbnails(self, context):
         """Regenerate thumbnails for all saved views by navigating to each and capturing."""
@@ -1476,28 +1467,14 @@ def _auto_start_gallery():
     if VIEW3D_OT_thumbnail_gallery._is_active:
         return None  # Already open, nothing to do
     
-    # Find a 3D view context with proper region
-    found = False
-    for window in bpy.context.window_manager.windows:
-        for area in window.screen.areas:
-            if area.type == 'VIEW_3D':
-                # Find the WINDOW region for proper modal attachment
-                region = None
-                for r in area.regions:
-                    if r.type == 'WINDOW':
-                        region = r
-                        break
-                if not region:
-                    continue
-                # Override context with window, area, and region
-                try:
-                    with bpy.context.temp_override(window=window, area=area, region=region):
-                        bpy.ops.view3d.thumbnail_gallery('INVOKE_DEFAULT')
-                    found = True
-                except Exception as e:
-                    print(f"[ViewPilot] Failed to auto-start gallery: {e}")
-                break
-        if found: break
+    area, _, region = utils.find_view3d_override_context(bpy.context)
+    window = utils.find_window_for_area(bpy.context, area)
+    if area and region and window:
+        try:
+            with bpy.context.temp_override(window=window, area=area, region=region):
+                bpy.ops.view3d.thumbnail_gallery('INVOKE_DEFAULT')
+        except Exception as e:
+            print(f"[ViewPilot] Failed to auto-start gallery: {e}")
     return None  # Unregister timer
 
 @bpy.app.handlers.persistent

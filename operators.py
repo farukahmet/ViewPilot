@@ -893,15 +893,8 @@ class VIEW3D_OT_save_current_view(bpy.types.Operator):
     
     @classmethod
     def poll(cls, context):
-        # Check if we have direct 3D View context
-        if context.space_data and context.space_data.type == 'VIEW_3D':
-            return True
-        # Fall back to finding any 3D View in the screen (for TOPBAR)
-        if context.screen:
-            for area in context.screen.areas:
-                if area.type == 'VIEW_3D':
-                    return True
-        return False
+        _, space, region = utils.find_view3d_context(context)
+        return bool(space and region)
     
     def execute(self, context):
         from . import data_storage
@@ -1142,15 +1135,8 @@ class VIEW3D_OT_update_saved_view(bpy.types.Operator):
     @classmethod
     def poll(cls, context):
         from . import data_storage
-        # Check for 3D View availability (direct or via screen)
-        has_view3d = False
-        if context.space_data and context.space_data.type == 'VIEW_3D':
-            has_view3d = True
-        elif context.screen:
-            for area in context.screen.areas:
-                if area.type == 'VIEW_3D':
-                    has_view3d = True
-                    break
+        _, space, region = utils.find_view3d_context(context)
+        has_view3d = bool(space and region)
         
         views = data_storage.get_saved_views()
         if not has_view3d or len(views) == 0:
