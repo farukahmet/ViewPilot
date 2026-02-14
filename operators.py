@@ -815,6 +815,76 @@ def _sync_saved_view_enums_safe(context, enum_value):
     _set_panel_gallery_enum_safe(context, enum_value)
 
 
+def _handle_storage_invalid(context, reporter, action_label="save view"):
+    """Report invalid storage and prompt user with overwrite/cancel options."""
+    reporter.report({'ERROR'}, f"Can't {action_label}: ViewPilot storage is corrupted")
+    try:
+        bpy.ops.viewpilot.recover_storage_overwrite('INVOKE_DEFAULT', action_label=action_label)
+    except Exception as error:
+        print(f"[ViewPilot] Failed to show recovery dialog: {error}")
+
+
+class VIEWPILOT_OT_recover_storage_overwrite(bpy.types.Operator):
+    """Overwrite corrupted ViewPilot storage with a fresh empty payload."""
+    bl_idname = "viewpilot.recover_storage_overwrite"
+    bl_label = "ViewPilot Storage Recovery"
+    bl_options = {'INTERNAL'}
+
+    action_label: bpy.props.StringProperty(default="save view", options={'SKIP_SAVE'})
+
+    def invoke(self, context, event):
+        wm = context.window_manager
+        try:
+            return wm.invoke_props_dialog(
+                self,
+                width=520,
+                title="ViewPilot Storage Error",
+                confirm_text="Overwrite",
+                cancel_default=True,
+            )
+        except TypeError:
+            return wm.invoke_props_dialog(self, width=520)
+
+    def draw(self, context):
+        from . import data_storage
+
+        layout = self.layout
+        layout.label(text=f"Can't {self.action_label} because JSON storage is corrupted.")
+        layout.label(text="Overwrite ViewPilot storage and start from scratch?")
+
+        backup_name = data_storage.get_storage_error_backup_name()
+        if backup_name:
+            layout.label(text=f"Backup: {backup_name}", icon='FILE_TEXT')
+
+        error_msg = data_storage.get_storage_error_message()
+        if error_msg:
+            layout.label(text=f"Details: {error_msg}")
+
+    def execute(self, context):
+        from . import data_storage
+
+        if not data_storage.force_reset_storage():
+            self.report({'ERROR'}, "Failed to overwrite ViewPilot storage (see console)")
+            return {'CANCELLED'}
+
+        try:
+            data_storage.sync_to_all_scenes()
+        except Exception:
+            pass
+
+        try:
+            from .properties import invalidate_saved_views_ui_caches
+            invalidate_saved_views_ui_caches()
+        except Exception:
+            pass
+
+        if VIEW3D_OT_thumbnail_gallery._is_active:
+            VIEW3D_OT_thumbnail_gallery.request_refresh()
+
+        self.report({'INFO'}, "ViewPilot storage overwritten. You can save views again.")
+        return {'FINISHED'}
+
+
 class VIEW3D_OT_save_current_view(bpy.types.Operator):
     """Save the current viewport as a new view"""
     bl_idname = "view3d.save_current_view"
@@ -878,6 +948,9 @@ class VIEW3D_OT_save_current_view(bpy.types.Operator):
         
         # Auto-generate unique name using the counter
         view_number = data_storage.get_next_view_number()
+        if view_number < 0:
+            _handle_storage_invalid(context, self, "save view")
+            return {'CANCELLED'}
         view_name = f"View {view_number}"
         
         # Capture viewport state as a dictionary
@@ -895,6 +968,9 @@ class VIEW3D_OT_save_current_view(bpy.types.Operator):
         
         # Add to JSON storage (auto-syncs to PropertyGroup)
         new_index = data_storage.add_saved_view(view_dict)
+        if new_index < 0:
+            _handle_storage_invalid(context, self, "save view")
+            return {'CANCELLED'}
         
         # Generate thumbnail for this view
         # Create a temporary PropertyGroup-like object for thumbnail generator
@@ -908,7 +984,8 @@ class VIEW3D_OT_save_current_view(bpy.types.Operator):
             thumb_name = generate_thumbnail(context, temp_view, view_name)
             if thumb_name:
                 view_dict["thumbnail_image"] = thumb_name
-                data_storage.update_saved_view(new_index, view_dict)
+                if not data_storage.update_saved_view(new_index, view_dict):
+                    self.report({'WARNING'}, "Thumbnail saved in-memory but ViewPilot storage update was blocked")
                 
             # Notify gallery to refresh if open
             if VIEW3D_OT_thumbnail_gallery._is_active:
@@ -1034,7 +1111,9 @@ class VIEW3D_OT_delete_saved_view(bpy.types.Operator):
             set_skip_enum_load(False)
         
         # Remove the view from JSON storage (auto-syncs to PropertyGroup)
-        data_storage.delete_saved_view(index)
+        if not data_storage.delete_saved_view(index):
+            _handle_storage_invalid(context, self, "delete view")
+            return {'CANCELLED'}
 
         # Invalidate both dropdown and panel icon enum caches after index shift.
         try:
@@ -1212,7 +1291,9 @@ class VIEW3D_OT_update_saved_view(bpy.types.Operator):
             traceback.print_exc()
         
         # Update in JSON storage
-        data_storage.update_saved_view(index, view_dict)
+        if not data_storage.update_saved_view(index, view_dict):
+            _handle_storage_invalid(context, self, "update view")
+            return {'CANCELLED'}
         
         # Clear modified flag and snap back to the view (it's now cleanly matched)
         params = context.scene.viewpilot
@@ -1270,7 +1351,8 @@ class VIEW3D_OT_rename_saved_view(bpy.types.Operator):
             
             # Update the view name in JSON storage
             view_dict["name"] = new_name
-            data_storage.update_saved_view(idx, view_dict)
+            if not data_storage.update_saved_view(idx, view_dict):
+                return
             
             # Sync camera if one exists with the old view name
             # Look for cameras matching pattern: "Prefix [Old View Name]" or just old name
@@ -1543,7 +1625,9 @@ class VIEW3D_OT_move_view_up(bpy.types.Operator):
             # Save the reordered list
             data = data_storage.load_data()
             data["saved_views"] = views
-            data_storage.save_data(data)
+            if not data_storage.save_data(data):
+                _handle_storage_invalid(context, self, "reorder views")
+                return {'CANCELLED'}
             
             # Sync to PropertyGroup so UIList updates
             data_storage.sync_to_all_scenes()
@@ -1600,7 +1684,9 @@ class VIEW3D_OT_move_view_down(bpy.types.Operator):
             # Save the reordered list
             data = data_storage.load_data()
             data["saved_views"] = views
-            data_storage.save_data(data)
+            if not data_storage.save_data(data):
+                _handle_storage_invalid(context, self, "reorder views")
+                return {'CANCELLED'}
             
             # Sync to PropertyGroup so UIList updates
             data_storage.sync_to_all_scenes()
@@ -1635,6 +1721,7 @@ class VIEW3D_OT_move_view_down(bpy.types.Operator):
 # ========================================================================
 
 classes = (
+    VIEWPILOT_OT_recover_storage_overwrite,
     VIEW3D_OT_view_history_monitor,
     VIEW3D_OT_view_history_back,
     VIEW3D_OT_view_history_forward,

@@ -26,6 +26,14 @@ UUID_PROP_KEY = "viewpilot_uuid"
 # Re-entrancy guard for load_data() to prevent callback recursion storms.
 _LOAD_DATA_GUARD = False
 
+# Storage health flags (protect against destructive overwrite on JSON parse failure).
+_STORAGE_PARSE_ERROR = False
+_STORAGE_PARSE_ERROR_MESSAGE = ""
+_STORAGE_PARSE_ERROR_BACKUP_NAME = ""
+_STORAGE_PARSE_ERROR_REPORTED = False
+_STORAGE_WRITE_BLOCK_REPORTED = False
+_LAST_PARSE_CONTENT_HASH = None
+
 
 # =============================================================================
 # UUID HELPERS - For tracking scenes/view layers by persistent ID
@@ -259,14 +267,129 @@ def _get_empty_data() -> Dict[str, Any]:
     }
 
 
+def _create_corrupt_backup(content: str) -> str:
+    """Persist corrupted JSON payload into a separate Text datablock for recovery."""
+    global _STORAGE_PARSE_ERROR_BACKUP_NAME, _LAST_PARSE_CONTENT_HASH
+
+    content_hash = hash(content)
+    if (
+        _STORAGE_PARSE_ERROR_BACKUP_NAME and
+        _LAST_PARSE_CONTENT_HASH == content_hash and
+        bpy.data.texts.get(_STORAGE_PARSE_ERROR_BACKUP_NAME) is not None
+    ):
+        return _STORAGE_PARSE_ERROR_BACKUP_NAME
+
+    base_name = f"{DATA_TEXT_NAME}.corrupt_backup"
+    backup_name = base_name
+    suffix = 1
+    while bpy.data.texts.get(backup_name) is not None:
+        backup_name = f"{base_name}.{suffix}"
+        suffix += 1
+
+    backup_text = bpy.data.texts.new(backup_name)
+    backup_text.use_fake_user = True
+    backup_text.write(content)
+
+    _STORAGE_PARSE_ERROR_BACKUP_NAME = backup_name
+    _LAST_PARSE_CONTENT_HASH = content_hash
+    return backup_name
+
+
+def _mark_parse_error(text: bpy.types.Text, content: str, error: Exception) -> None:
+    """Mark storage invalid and keep a backup copy of the malformed payload."""
+    global _STORAGE_PARSE_ERROR
+    global _STORAGE_PARSE_ERROR_MESSAGE
+    global _STORAGE_PARSE_ERROR_REPORTED
+    global _STORAGE_WRITE_BLOCK_REPORTED
+
+    was_parse_error = _STORAGE_PARSE_ERROR
+    _STORAGE_PARSE_ERROR = True
+    _STORAGE_PARSE_ERROR_MESSAGE = str(error)
+    # Only reset write-block spam guard when transitioning into error state.
+    if not was_parse_error:
+        _STORAGE_WRITE_BLOCK_REPORTED = False
+
+    backup_name = ""
+    if content and content.strip():
+        try:
+            backup_name = _create_corrupt_backup(content)
+        except Exception as backup_error:
+            if not _STORAGE_PARSE_ERROR_REPORTED:
+                print(f"[ViewPilot] ERROR Failed to back up malformed JSON: {backup_error}")
+
+    if not _STORAGE_PARSE_ERROR_REPORTED:
+        if backup_name:
+            print(
+                f"[ViewPilot] ERROR Malformed JSON in '{text.name}'. "
+                f"Writes are blocked to prevent data loss. Backup saved as '{backup_name}'."
+            )
+        else:
+            print(
+                f"[ViewPilot] ERROR Malformed JSON in '{text.name}'. "
+                "Writes are blocked to prevent data loss."
+            )
+        _STORAGE_PARSE_ERROR_REPORTED = True
+
+
+def _clear_parse_error_state() -> None:
+    """Clear parse-error state after valid JSON is observed again."""
+    global _STORAGE_PARSE_ERROR
+    global _STORAGE_PARSE_ERROR_MESSAGE
+    global _STORAGE_PARSE_ERROR_REPORTED
+    global _STORAGE_WRITE_BLOCK_REPORTED
+
+    if _STORAGE_PARSE_ERROR and _STORAGE_PARSE_ERROR_REPORTED:
+        print("[ViewPilot] JSON storage recovered. Writes re-enabled.")
+
+    _STORAGE_PARSE_ERROR = False
+    _STORAGE_PARSE_ERROR_MESSAGE = ""
+    _STORAGE_PARSE_ERROR_REPORTED = False
+    _STORAGE_WRITE_BLOCK_REPORTED = False
+
+
+def is_storage_parse_error() -> bool:
+    """True when storage JSON is malformed and writes are blocked."""
+    return _STORAGE_PARSE_ERROR
+
+
+def get_storage_error_message() -> str:
+    """Return the latest storage parse error message (if any)."""
+    return _STORAGE_PARSE_ERROR_MESSAGE
+
+
+def get_storage_error_backup_name() -> str:
+    """Return the Text datablock name containing malformed JSON backup (if any)."""
+    return _STORAGE_PARSE_ERROR_BACKUP_NAME
+
+
+def force_reset_storage() -> bool:
+    """Overwrite ViewPilot JSON storage with a fresh empty payload."""
+    try:
+        text = get_data_text()
+        _save_raw_data(text, _get_empty_data())
+        _clear_parse_error_state()
+        return True
+    except Exception as error:
+        print(f"[ViewPilot] ERROR Failed to reset storage: {error}")
+        return False
+
+
 def _load_raw_data(text: bpy.types.Text) -> Dict[str, Any]:
     """Load and parse JSON from Text datablock."""
+    content = ""
     try:
         content = text.as_string()
         if not content.strip():
+            _clear_parse_error_state()
             return _get_empty_data()
-        return json.loads(content)
-    except (json.JSONDecodeError, Exception):
+        data = json.loads(content)
+        _clear_parse_error_state()
+        return data
+    except json.JSONDecodeError as error:
+        _mark_parse_error(text, content, error)
+        return _get_empty_data()
+    except Exception as error:
+        _mark_parse_error(text, content, error)
         return _get_empty_data()
 
 
@@ -290,10 +413,18 @@ def load_data() -> Dict[str, Any]:
         _LOAD_DATA_GUARD = False
 
 
-def save_data(data: Dict[str, Any]) -> None:
+def save_data(data: Dict[str, Any]) -> bool:
     """Save all ViewPilot data to storage."""
+    global _STORAGE_WRITE_BLOCK_REPORTED
+    if _STORAGE_PARSE_ERROR:
+        if not _STORAGE_WRITE_BLOCK_REPORTED:
+            detail = _STORAGE_PARSE_ERROR_MESSAGE or "Unknown parse error"
+            print(f"[ViewPilot] ERROR Write blocked: malformed JSON storage ({detail})")
+            _STORAGE_WRITE_BLOCK_REPORTED = True
+        return False
     text = get_data_text()
     _save_raw_data(text, data)
+    return True
 
 
 # =============================================================================
@@ -315,7 +446,7 @@ def get_saved_view(index: int) -> Optional[Dict[str, Any]]:
 
 
 def add_saved_view(view_dict: Dict[str, Any], auto_sync: bool = True) -> int:
-    """Add a new saved view. Returns the index of the new view.
+    """Add a new saved view. Returns the index of the new view, or -1 on failure.
     
     Args:
         view_dict: The view data to add
@@ -323,7 +454,8 @@ def add_saved_view(view_dict: Dict[str, Any], auto_sync: bool = True) -> int:
     """
     data = load_data()
     data["saved_views"].append(view_dict)
-    save_data(data)
+    if not save_data(data):
+        return -1
     if auto_sync:
         sync_to_all_scenes()
     return len(data["saved_views"]) - 1
@@ -340,7 +472,8 @@ def update_saved_view(index: int, view_dict: Dict[str, Any], auto_sync: bool = T
     data = load_data()
     if 0 <= index < len(data["saved_views"]):
         data["saved_views"][index] = view_dict
-        save_data(data)
+        if not save_data(data):
+            return False
         if auto_sync:
             sync_to_all_scenes()
         return True
@@ -357,7 +490,8 @@ def delete_saved_view(index: int, auto_sync: bool = True) -> bool:
     data = load_data()
     if 0 <= index < len(data["saved_views"]):
         del data["saved_views"][index]
-        save_data(data)
+        if not save_data(data):
+            return False
         if auto_sync:
             sync_to_all_scenes()
         return True
@@ -377,7 +511,8 @@ def reorder_saved_views(new_order: List[int], auto_sync: bool = True) -> bool:
         return False
     try:
         data["saved_views"] = [views[i] for i in new_order]
-        save_data(data)
+        if not save_data(data):
+            return False
         if auto_sync:
             sync_to_all_scenes()
         return True
@@ -388,9 +523,12 @@ def reorder_saved_views(new_order: List[int], auto_sync: bool = True) -> bool:
 def get_next_view_number() -> int:
     """Get and increment the next view number for naming."""
     data = load_data()
+    if is_storage_parse_error():
+        return -1
     num = data.get("next_view_number", 1)
     data["next_view_number"] = num + 1
-    save_data(data)
+    if not save_data(data):
+        return -1
     return num
 
 
@@ -755,15 +893,23 @@ def migrate_from_scene_storage() -> int:
         old_views = scene.saved_views
         if len(old_views) == 0:
             continue
+
+        migration_failed = False
         
         # Convert each view to dict and add to JSON storage
         for view in old_views:
             view_dict = view_to_dict(view)
-            add_saved_view(view_dict, auto_sync=False)  # Skip sync during migration
+            if add_saved_view(view_dict, auto_sync=False) < 0:
+                migration_failed = True
+                print("[ViewPilot] Migration stopped: JSON storage write blocked.")
+                break
             migrated_count += 1
-        
-        # Clear old storage after migration
-        old_views.clear()
+
+        # Clear old storage only if this scene migrated successfully.
+        if not migration_failed:
+            old_views.clear()
+        else:
+            break
     
     # Update next_view_number to avoid name collisions
     # Parse existing view names to find the highest "View N" number
@@ -822,6 +968,9 @@ def sync_to_all_scenes() -> int:
     
     try:
         views = get_saved_views()
+        if is_storage_parse_error():
+            # Keep existing scene-side data untouched when JSON storage is invalid.
+            return 0
         view_count = len(views)
         controller = None
         prev_skip_enum_load = False

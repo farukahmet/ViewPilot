@@ -184,6 +184,8 @@ def unregister():
         bpy.app.handlers.depsgraph_update_post.remove(utils.viewpilot_depsgraph_handler)
     
     # Remove Scene properties
+    if hasattr(bpy.types.Scene, "viewpilot"):
+        del bpy.types.Scene.viewpilot
     del bpy.types.Scene.saved_views_next_number
     del bpy.types.Scene.saved_views_index
     del bpy.types.Scene.saved_views

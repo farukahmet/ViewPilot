@@ -420,7 +420,12 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
                                             break
                                     if region:
                                         with bpy.context.temp_override(window=window, area=ctx_area, region=region):
-                                            bpy.ops.view3d.save_current_view()
+                                            try:
+                                                bpy.ops.view3d.save_current_view()
+                                            except RuntimeError as error:
+                                                # Save operator may intentionally cancel (e.g. storage invalid).
+                                                # Keep gallery modal loop alive without dumping traceback noise.
+                                                print(f"[ViewPilot] Save from gallery cancelled: {error}")
                                     break
                             else:
                                 continue
