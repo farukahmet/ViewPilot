@@ -19,6 +19,7 @@ _preview_serial = 0
 _last_saved_views_signature = ()
 _undo_refresh_queued = False
 _icon_retry_queued = False
+_is_registered = False
 
 
 def _next_preview_id(view_name):
@@ -449,9 +450,26 @@ def on_redo_post(dummy):
 
 def register():
     """Initialize preview collection."""
-    global preview_collections
+    global preview_collections, _is_registered
+
+    if _is_registered:
+        return
+
+    if "viewpilot_previews" in preview_collections:
+        try:
+            bpy.utils.previews.remove(preview_collections["viewpilot_previews"])
+        except Exception:
+            pass
+        preview_collections.pop("viewpilot_previews", None)
+
     preview_collections["viewpilot_previews"] = bpy.utils.previews.new()
-    bpy.utils.register_class(VIEWPILOT_OT_reload_previews)
+
+    try:
+        bpy.utils.register_class(VIEWPILOT_OT_reload_previews)
+    except Exception:
+        # Already registered from a non-ideal reload path.
+        pass
+
     if on_file_load not in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.append(on_file_load)
     if on_undo_post not in bpy.app.handlers.undo_post:
@@ -459,11 +477,12 @@ def register():
     if on_redo_post not in bpy.app.handlers.redo_post:
         bpy.app.handlers.redo_post.append(on_redo_post)
     _mark_saved_views_signature()
+    _is_registered = True
 
 
 def unregister():
     """Clean up preview collection."""
-    global preview_collections, _preview_serial, _last_saved_views_signature, _undo_refresh_queued, _icon_retry_queued
+    global preview_collections, _preview_serial, _last_saved_views_signature, _undo_refresh_queued, _icon_retry_queued, _is_registered
     
     # Remove handler
     if on_file_load in bpy.app.handlers.load_post:
@@ -473,7 +492,11 @@ def unregister():
     if on_redo_post in bpy.app.handlers.redo_post:
         bpy.app.handlers.redo_post.remove(on_redo_post)
     
-    bpy.utils.unregister_class(VIEWPILOT_OT_reload_previews)
+    try:
+        bpy.utils.unregister_class(VIEWPILOT_OT_reload_previews)
+    except Exception:
+        # Class may already be unregistered in non-ideal reload paths.
+        pass
     
     for pcoll in preview_collections.values():
         bpy.utils.previews.remove(pcoll)
@@ -483,3 +506,4 @@ def unregister():
     _last_saved_views_signature = ()
     _undo_refresh_queued = False
     _icon_retry_queued = False
+    _is_registered = False

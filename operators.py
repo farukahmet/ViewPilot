@@ -3,6 +3,7 @@
 import bpy
 import time
 import traceback
+from contextlib import contextmanager
 from mathutils import Vector, Quaternion
 
 from . import utils, debug_tools
@@ -786,14 +787,16 @@ class VIEW3D_OT_dolly_to_obstacle(bpy.types.Operator):
 # SAVED VIEWS OPERATORS
 # ========================================================================
 
-def get_skip_enum_load():
-    """Get the skip_enum_load flag from StateController."""
-    return get_controller().skip_enum_load
-
-
-def set_skip_enum_load(value):
-    """Set the skip_enum_load flag in StateController."""
-    get_controller().skip_enum_load = value
+@contextmanager
+def _suppress_saved_view_enum_load():
+    """Temporarily suppress enum load callbacks and always restore prior state."""
+    controller = get_controller()
+    prev_skip = controller.skip_enum_load
+    controller.skip_enum_load = True
+    try:
+        yield
+    finally:
+        controller.skip_enum_load = prev_skip
 
 
 def _set_panel_gallery_enum_safe(context, preferred_value=None):
@@ -822,6 +825,22 @@ def _handle_storage_invalid(context, reporter, action_label="save view"):
         bpy.ops.viewpilot.recover_storage_overwrite('INVOKE_DEFAULT', action_label=action_label)
     except Exception as error:
         print(f"[ViewPilot] Failed to show recovery dialog: {error}")
+
+
+def _refresh_saved_views_ui(include_modal_gallery=True):
+    """Invalidate saved-view UI caches and optionally refresh modal gallery."""
+    try:
+        from .properties import invalidate_saved_views_ui_caches
+        invalidate_saved_views_ui_caches()
+    except Exception:
+        try:
+            from .preview_manager import invalidate_panel_gallery_cache
+            invalidate_panel_gallery_cache()
+        except Exception:
+            pass
+
+    if include_modal_gallery and VIEW3D_OT_thumbnail_gallery._is_active:
+        VIEW3D_OT_thumbnail_gallery.request_refresh()
 
 
 class VIEWPILOT_OT_recover_storage_overwrite(bpy.types.Operator):
@@ -872,14 +891,7 @@ class VIEWPILOT_OT_recover_storage_overwrite(bpy.types.Operator):
         except Exception:
             pass
 
-        try:
-            from .properties import invalidate_saved_views_ui_caches
-            invalidate_saved_views_ui_caches()
-        except Exception:
-            pass
-
-        if VIEW3D_OT_thumbnail_gallery._is_active:
-            VIEW3D_OT_thumbnail_gallery.request_refresh()
+        _refresh_saved_views_ui()
 
         self.report({'INFO'}, "ViewPilot storage overwritten. You can save views again.")
         return {'FINISHED'}
@@ -969,12 +981,8 @@ class VIEW3D_OT_save_current_view(bpy.types.Operator):
         
         # Sync the shared property enum to show the new view
         # We temporarily skip loading because we are already AT the view
-        try:
-            set_skip_enum_load(True)
+        with _suppress_saved_view_enum_load():
             _sync_saved_view_enums_safe(context, str(new_index))
-            set_skip_enum_load(False)
-        except Exception:
-             set_skip_enum_load(False)
         
         self.report({'INFO'}, f"Saved view: {view_name}")
         return {'FINISHED'}
@@ -1061,29 +1069,18 @@ class VIEW3D_OT_delete_saved_view(bpy.types.Operator):
 
         # Pre-clear dynamic enum selections so they never reference a soon-to-be
         # invalid index while sync_to_all_scenes updates the backing collection.
-        try:
-            set_skip_enum_load(True)
+        with _suppress_saved_view_enum_load():
             context.scene.saved_views_index = -1
             context.scene.viewpilot.saved_views_enum = 'NONE'
             _set_panel_gallery_enum_safe(context, 'NONE')
-        finally:
-            set_skip_enum_load(False)
         
         # Remove the view from JSON storage (auto-syncs to PropertyGroup)
         if not data_storage.delete_saved_view(index):
             _handle_storage_invalid(context, self, "delete view")
             return {'CANCELLED'}
 
-        # Invalidate both dropdown and panel icon enum caches after index shift.
-        try:
-            from .properties import invalidate_saved_views_ui_caches
-            invalidate_saved_views_ui_caches()
-        except Exception:
-            pass
-        
-        # Notify gallery to refresh AFTER removal (so indices are correct)
-        if VIEW3D_OT_thumbnail_gallery._is_active:
-            VIEW3D_OT_thumbnail_gallery.request_refresh()
+        # Invalidate dropdown/panel caches and refresh gallery after index shift.
+        _refresh_saved_views_ui()
         
         # Remap active selection to a valid post-delete index.
         remaining = len(data_storage.get_saved_views())
@@ -1102,8 +1099,7 @@ class VIEW3D_OT_delete_saved_view(bpy.types.Operator):
 
         # Keep both enums synchronized to a valid identifier to avoid stale
         # dynamic enum values after index shifts.
-        try:
-            set_skip_enum_load(True)
+        with _suppress_saved_view_enum_load():
             context.scene.saved_views_index = new_active
             if new_active >= 0:
                 enum_value = str(new_active)
@@ -1111,8 +1107,6 @@ class VIEW3D_OT_delete_saved_view(bpy.types.Operator):
             else:
                 context.scene.viewpilot.saved_views_enum = 'NONE'
                 _set_panel_gallery_enum_safe(context, 'NONE')
-        finally:
-            set_skip_enum_load(False)
         
         self.report({'INFO'}, f"Deleted view: {view_name}")
         
@@ -1221,12 +1215,8 @@ class VIEW3D_OT_update_saved_view(bpy.types.Operator):
         params.last_active_view_index = -1
         
         # Force dropdown update
-        try:
-             set_skip_enum_load(True)
-             _sync_saved_view_enums_safe(context, str(index))
-             set_skip_enum_load(False)
-        except Exception:
-             set_skip_enum_load(False)
+        with _suppress_saved_view_enum_load():
+            _sync_saved_view_enums_safe(context, str(index))
         
         self.report({'INFO'}, f"Updated view: {view_name}")
         return {'FINISHED'}
@@ -1332,14 +1322,7 @@ class VIEW3D_OT_rename_saved_view(bpy.types.Operator):
 
         self._rename_associated_camera(old_name, new_name)
 
-        try:
-            from .properties import invalidate_saved_views_ui_caches
-            invalidate_saved_views_ui_caches()
-        except Exception:
-            pass
-
-        if VIEW3D_OT_thumbnail_gallery._is_active:
-            VIEW3D_OT_thumbnail_gallery.request_refresh()
+        _refresh_saved_views_ui()
 
         self.report({'INFO'}, f"Renamed view: {new_name}")
         return {'FINISHED'}
@@ -1419,16 +1402,10 @@ class VIEW3D_OT_set_saved_views_index(bpy.types.Operator):
     index: bpy.props.IntProperty(default=-1)
     
     def execute(self, context):
-        from .state_controller import get_controller
-        
         # Set index without triggering view load
-        controller = get_controller()
-        try:
-            controller.skip_enum_load = True
+        with _suppress_saved_view_enum_load():
             context.scene.saved_views_index = self.index
             _sync_saved_view_enums_safe(context, str(self.index))
-        finally:
-            controller.skip_enum_load = False
         
         return {'FINISHED'}
 
@@ -1522,17 +1499,8 @@ class VIEW3D_OT_reorder_views(bpy.types.Operator):
         col.operator("view3d.move_view_down", icon='TRIA_DOWN', text="")
     
     def execute(self, context):
-        # Refresh galleries after reordering
-        try:
-            from .properties import invalidate_saved_views_ui_caches
-            invalidate_saved_views_ui_caches()
-        except Exception:
-            from .preview_manager import invalidate_panel_gallery_cache
-            invalidate_panel_gallery_cache()
-        
-        if VIEW3D_OT_thumbnail_gallery._is_active:
-            VIEW3D_OT_thumbnail_gallery.request_refresh()
-        
+        # Refresh galleries after reordering.
+        _refresh_saved_views_ui()
         return {'FINISHED'}
 
 
@@ -1551,7 +1519,6 @@ class VIEW3D_OT_move_view_up(bpy.types.Operator):
     
     def execute(self, context):
         from . import data_storage
-        from .state_controller import get_controller
         
         views = data_storage.get_saved_views()
         idx = context.scene.saved_views_index
@@ -1573,24 +1540,12 @@ class VIEW3D_OT_move_view_up(bpy.types.Operator):
             # Update index to follow the moved view
             new_index = idx - 1
             
-            controller = get_controller()
-            try:
-                controller.skip_enum_load = True
+            with _suppress_saved_view_enum_load():
                 context.scene.saved_views_index = new_index
                 _sync_saved_view_enums_safe(context, str(new_index))
-            finally:
-                controller.skip_enum_load = False
             
-            # Refresh galleries
-            try:
-                from .properties import invalidate_saved_views_ui_caches
-                invalidate_saved_views_ui_caches()
-            except Exception:
-                from .preview_manager import invalidate_panel_gallery_cache
-                invalidate_panel_gallery_cache()
-            
-            if VIEW3D_OT_thumbnail_gallery._is_active:
-                VIEW3D_OT_thumbnail_gallery.request_refresh()
+            # Refresh galleries.
+            _refresh_saved_views_ui()
         
         return {'FINISHED'}
 
@@ -1610,7 +1565,6 @@ class VIEW3D_OT_move_view_down(bpy.types.Operator):
     
     def execute(self, context):
         from . import data_storage
-        from .state_controller import get_controller
         
         views = data_storage.get_saved_views()
         idx = context.scene.saved_views_index
@@ -1632,24 +1586,12 @@ class VIEW3D_OT_move_view_down(bpy.types.Operator):
             # Update index to follow the moved view
             new_index = idx + 1
             
-            controller = get_controller()
-            try:
-                controller.skip_enum_load = True
+            with _suppress_saved_view_enum_load():
                 context.scene.saved_views_index = new_index
                 _sync_saved_view_enums_safe(context, str(new_index))
-            finally:
-                controller.skip_enum_load = False
             
-            # Refresh galleries
-            try:
-                from .properties import invalidate_saved_views_ui_caches
-                invalidate_saved_views_ui_caches()
-            except Exception:
-                from .preview_manager import invalidate_panel_gallery_cache
-                invalidate_panel_gallery_cache()
-            
-            if VIEW3D_OT_thumbnail_gallery._is_active:
-                VIEW3D_OT_thumbnail_gallery.request_refresh()
+            # Refresh galleries.
+            _refresh_saved_views_ui()
         
         return {'FINISHED'}
 
