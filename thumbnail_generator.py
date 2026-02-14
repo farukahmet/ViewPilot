@@ -19,7 +19,7 @@ import glob
 import os
 import traceback
 
-from . import utils
+from . import utils, debug_tools
 from .temp_paths import make_temp_png_path
 
 
@@ -47,7 +47,7 @@ class ThumbnailRenderer:
         """
         area, space, region = self._find_view3d_context(context)
         if not all([area, space, region]):
-            print("[ViewPilot] No valid 3D View found for thumbnail rendering")
+            debug_tools.log("no valid 3D view found for thumbnail rendering")
             return None
         
         # Store original shading settings
@@ -126,7 +126,7 @@ class ThumbnailRenderer:
                     if saved_view.shading_selected_world in bpy.data.worlds:
                         context.scene.world = bpy.data.worlds[saved_view.shading_selected_world]
             except Exception as e:
-                print(f"[ViewPilot] Could not apply saved shading: {e}")
+                debug_tools.log(f"could not apply saved shading: {e}")
         
         # Detect Cycles RENDERED mode (can't capture - use SOLID fallback)
         is_cycles_rendered = (
@@ -533,7 +533,7 @@ class ThumbnailRenderer:
                 item.identifier
                 for item in rna_owner.bl_rna.properties[prop_name].enum_items
             }
-        except Exception:
+        except (AttributeError, KeyError, TypeError):
             return set()
 
     def _snapshot_rna_scalars(self, rna_owner):
@@ -558,7 +558,7 @@ class ThumbnailRenderer:
         """Try to set one scalar RNA property. Return True on success."""
         try:
             prop = rna_owner.bl_rna.properties[prop_name]
-        except Exception:
+        except (AttributeError, KeyError, TypeError):
             return False
 
         if prop.is_readonly:
@@ -569,7 +569,7 @@ class ThumbnailRenderer:
         try:
             setattr(rna_owner, prop_name, value)
             return True
-        except Exception:
+        except (AttributeError, TypeError, ValueError, RuntimeError):
             return False
 
     def _set_enum_value(self, rna_owner, prop_name, value, debug_prefix):
@@ -579,7 +579,8 @@ class ThumbnailRenderer:
         try:
             setattr(rna_owner, prop_name, value)
             return
-        except Exception:
+        except (AttributeError, TypeError, ValueError, RuntimeError):
+            debug_tools.log(f"{debug_prefix} failed to restore '{prop_name}'")
             return
 
     def _restore_rna_scalars(self, rna_owner, state, debug_prefix="", priority=()):
@@ -679,14 +680,14 @@ class ThumbnailRenderer:
 
             return utils.find_view3d_override_context(context, preferred_area=preferred_area)
         except Exception as e:
-            print(f"[ViewPilot] Error finding 3D view context: {e}")
+            debug_tools.log(f"error finding 3D view context: {e}")
             return None, None, None
     
     def _load_from_file(self, filepath, image_name):
         """Load the rendered PNG and prepare it for display."""
         try:
             if not filepath or not os.path.exists(filepath):
-                print(f"[ViewPilot] Thumbnail file missing: {filepath}")
+                debug_tools.log(f"thumbnail file missing: {filepath}")
                 return False
 
             img = bpy.data.images.get(image_name)

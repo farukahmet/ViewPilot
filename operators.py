@@ -65,7 +65,7 @@ class VIEW3D_OT_view_history_monitor(bpy.types.Operator):
             if self.last_scene_count > 0:  # Skip initial detection
                 fixed = data_storage.fix_duplicate_scene_uuids()
                 if fixed:
-                    print(f"[ViewPilot] Fixed {fixed} duplicate scene UUID(s)")
+                    debug_tools.log(f"fixed {fixed} duplicate scene UUID(s)")
                 # Also check for new scenes needing UUIDs
                 for scene in bpy.data.scenes:
                     data_storage.ensure_scene_uuid(scene)
@@ -86,7 +86,7 @@ class VIEW3D_OT_view_history_monitor(bpy.types.Operator):
             if current_vl_count != last_vl_count:
                 fixed = data_storage.fix_duplicate_view_layer_uuids(scene)
                 if fixed:
-                    print(f"[ViewPilot] Fixed {fixed} duplicate view layer UUID(s) in '{scene.name}'")
+                    debug_tools.log(f"fixed {fixed} duplicate view layer UUID(s) in '{scene.name}'")
                 # Also ensure new view layers have UUIDs
                 for vl in scene.view_layers:
                     data_storage.ensure_view_layer_uuid(vl)
@@ -121,7 +121,7 @@ class VIEW3D_OT_view_history_monitor(bpy.types.Operator):
                 props.keep_camera_active
             ):
                 return self.MAINTENANCE_INTERVAL_ACTIVE
-        except Exception:
+        except (AttributeError, ReferenceError, RuntimeError):
             pass
         return self.MAINTENANCE_INTERVAL_IDLE
 
@@ -200,7 +200,7 @@ class VIEW3D_OT_view_history_monitor(bpy.types.Operator):
                     # Selection changed! Disable orbit mode
                     props['orbit_around_selection'] = False
                     props['orbit_initialized'] = False
-                    print("[ViewPilot] Orbit mode auto-disabled (selection changed)")
+                    debug_tools.log("orbit mode auto-disabled (selection changed)")
                 
                 self.last_selection_hash = current_hash
             else:
@@ -333,7 +333,7 @@ class VIEW3D_OT_view_history_monitor(bpy.types.Operator):
                     if pos_changed or rot_changed:
                         props['orbit_around_selection'] = False
                         props['orbit_initialized'] = False
-                        print("[ViewPilot] Orbit mode auto-disabled (external movement detected)")
+                        debug_tools.log("orbit mode auto-disabled (external movement detected)")
 
                 # Movement detected!
                 debug_tools.inc("history.monitor.movement.detected")
@@ -352,7 +352,7 @@ class VIEW3D_OT_view_history_monitor(bpy.types.Operator):
                     # (suppressed during VIEW_RESTORE, HISTORY_NAV, or grace periods)
                     if controller.should_record_history():
                         debug_tools.inc("history.monitor.history.record_allowed")
-                        print(f"[View History] Saved. (History Size: {len(utils.view_history)})")
+                        debug_tools.log(f"history saved (size={len(utils.view_history)})")
                         with debug_tools.timed("history.monitor.history_add.total"):
                             add_to_history(current_state)
                         debug_tools.inc("history.monitor.history.add_called")
@@ -412,7 +412,7 @@ class VIEW3D_OT_view_history_back(bpy.types.Operator):
             try:
                 context.scene.viewpilot.reinitialize_from_context(context)
             except Exception as e:
-                print(f"Error syncing ViewPilot properties: {e}")
+                debug_tools.log(f"error syncing ViewPilot properties: {e}")
             return {'FINISHED'}
         else:
             if not utils.view_history:
@@ -444,7 +444,7 @@ class VIEW3D_OT_view_history_forward(bpy.types.Operator):
             try:
                 context.scene.viewpilot.reinitialize_from_context(context)
             except Exception as e:
-                print(f"Error syncing ViewPilot properties: {e}")
+                debug_tools.log(f"error syncing ViewPilot properties: {e}")
             return {'FINISHED'}
         else:
             # Show current position even when can't go forward
@@ -827,7 +827,7 @@ def _set_panel_gallery_enum_safe(context, preferred_value=None):
     try:
         from .properties import _set_panel_gallery_enum_safe as _set_safe
         return _set_safe(context.scene.viewpilot, preferred_value)
-    except Exception:
+    except (ImportError, AttributeError, TypeError, ValueError, RuntimeError):
         return False
 
 
@@ -836,7 +836,7 @@ def _sync_saved_view_enums_safe(context, enum_value):
     props = context.scene.viewpilot
     try:
         props.saved_views_enum = enum_value
-    except Exception:
+    except (AttributeError, TypeError, ValueError, RuntimeError):
         pass
     _set_panel_gallery_enum_safe(context, enum_value)
 
@@ -846,7 +846,10 @@ def _handle_storage_invalid(context, reporter, action_label="save view"):
     reporter.report({'ERROR'}, f"Can't {action_label}: ViewPilot storage is corrupted")
     try:
         bpy.ops.viewpilot.recover_storage_overwrite('INVOKE_DEFAULT', action_label=action_label)
+    except RuntimeError as error:
+        print(f"[ViewPilot] Failed to show recovery dialog: {error}")
     except Exception as error:
+        debug_tools.log(f"unexpected error showing recovery dialog: {error}")
         print(f"[ViewPilot] Failed to show recovery dialog: {error}")
 
 
@@ -911,8 +914,8 @@ class VIEWPILOT_OT_recover_storage_overwrite(bpy.types.Operator):
 
         try:
             data_storage.sync_to_all_scenes()
-        except Exception:
-            pass
+        except Exception as error:
+            debug_tools.log(f"sync_to_all_scenes failed after storage reset: {error}")
 
         _refresh_saved_views_ui()
 

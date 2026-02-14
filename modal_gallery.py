@@ -37,7 +37,7 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
         try:
             from .preferences import get_preferences
             return get_preferences().thumbnail_size_max
-        except Exception:
+        except (ImportError, AttributeError, RuntimeError):
             return cls.THUMB_SIZE_MAX_DEFAULT
     
     _draw_handler = None
@@ -171,7 +171,7 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
             if callable(free_fn):
                 try:
                     free_fn()
-                except Exception:
+                except (RuntimeError, ReferenceError, ValueError, AttributeError):
                     pass
         self._textures.clear()
 
@@ -182,7 +182,7 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
             if img:
                 try:
                     bpy.data.images.remove(img)
-                except Exception:
+                except (RuntimeError, ReferenceError, ValueError, AttributeError):
                     pass
         self._display_image_names.clear()
 
@@ -421,7 +421,7 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
                             except RuntimeError as error:
                                 # Save operator may intentionally cancel (e.g. storage invalid).
                                 # Keep gallery modal loop alive without dumping traceback noise.
-                                print(f"[ViewPilot] Save from gallery cancelled: {error}")
+                                debug_tools.log(f"save from gallery cancelled: {error}")
                     return {'RUNNING_MODAL'}
             
             # Check Thumbnail Click
@@ -554,7 +554,7 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
             
             views = data_storage.get_saved_views()
             if not views:
-                print("[ViewPilot] No saved views to regenerate")
+                debug_tools.log("no saved views to regenerate")
                 return
             
             # Track which views were updated for batched save
@@ -564,7 +564,7 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
             space = context.space_data
             region = space.region_3d if space else None
             if not region:
-                print("[ViewPilot] No region_3d found")
+                debug_tools.log("no region_3d found for thumbnail regeneration")
                 return
             
             # Store actual viewport state
@@ -582,7 +582,7 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
             # Begin a critical update transaction to block other updates
             controller = get_controller()
             if not controller.begin_update(UpdateSource.VIEW_RESTORE, LockPriority.CRITICAL):
-                print("[ViewPilot] Could not acquire lock for thumbnail regeneration")
+                debug_tools.log("could not acquire lock for thumbnail regeneration")
                 return
             
             # Start a long grace period to prevent history recording during thumbnail regen
@@ -613,7 +613,7 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
                         space = context.space_data
                         region = space.region_3d if space else None
                         if not region:
-                            print(f"[ViewPilot] Lost region_3d after scene switch for view {i}")
+                            debug_tools.log(f"lost region_3d after scene switch for view index {i}")
                             continue
                     
                     # Switch to the view's view layer if different
@@ -677,7 +677,7 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
                         space = context.space_data
                         region = space.region_3d if space else None
                 except Exception as restore_err:
-                    print(f"[ViewPilot] Error restoring scene: {restore_err}")
+                    debug_tools.log(f"error restoring scene after thumbnail regeneration: {restore_err}")
                 
                 # Restore viewport state
                 if region:
@@ -692,13 +692,13 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
                         else:
                             region.view_perspective = 'ORTHO'
                     except Exception as restore_err:
-                        print(f"[ViewPilot] Error restoring viewport state: {restore_err}")
+                        debug_tools.log(f"error restoring viewport state after thumbnail regeneration: {restore_err}")
                 
                 if space:
                     try:
                         space.lens = original_lens
                     except Exception as restore_err:
-                        print(f"[ViewPilot] Error restoring lens: {restore_err}")
+                        debug_tools.log(f"error restoring lens after thumbnail regeneration: {restore_err}")
                 
                 # Restore original view layer
                 try:
@@ -706,21 +706,27 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
                         if context.window.view_layer != original_view_layer:
                             context.window.view_layer = original_view_layer
                 except Exception as restore_err:
-                    print(f"[ViewPilot] Error restoring view layer: {restore_err}")
+                    debug_tools.log(f"error restoring view layer after thumbnail regeneration: {restore_err}")
                 
                 # Restore saved views index and world
                 try:
                     context.scene.saved_views_index = original_index
                     context.scene.world = original_world
                 except Exception as restore_err:
-                    print(f"[ViewPilot] Error restoring index/world: {restore_err}")
+                    debug_tools.log(f"error restoring index/world after thumbnail regeneration: {restore_err}")
                 
                 # Reset enum property to match the index
                 try:
                     controller.skip_enum_load = True
-                    context.scene.viewpilot.saved_views_enum = str(original_index)
-                except Exception:
-                    pass
+                    restored_enum = str(original_index) if original_index >= 0 else 'NONE'
+                    context.scene.viewpilot.saved_views_enum = restored_enum
+                    try:
+                        from .properties import _set_panel_gallery_enum_safe as _set_panel_enum_safe
+                        _set_panel_enum_safe(context.scene.viewpilot, restored_enum)
+                    except (ImportError, AttributeError, TypeError, ValueError, RuntimeError):
+                        pass
+                except (TypeError, ValueError, RuntimeError, AttributeError) as restore_err:
+                    debug_tools.log(f"error restoring saved_views_enum after thumbnail regeneration: {restore_err}")
                 finally:
                     controller.skip_enum_load = False
                 
@@ -735,7 +741,7 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
             
             # Reload textures after regeneration
             self._load_textures(context)
-            print(f"[ViewPilot] Regenerated {len(views)} thumbnails")
+            debug_tools.log(f"regenerated {len(views)} thumbnails")
         except Exception as e:
             import traceback
             print(f"[ViewPilot] Error regenerating thumbnails: {e}")
@@ -798,9 +804,9 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
                                 pass
                             
                     except Exception as e:
-                        print(f"[ViewPilot] Failed to load texture for {view_dict.get('name', 'View')}: {e}")
+                        debug_tools.log(f"failed to load texture for '{view_dict.get('name', 'View')}': {e}")
                 else:
-                    print(f"[ViewPilot] Image not found: {thumb_name}")
+                    debug_tools.log(f"image not found for gallery texture load: {thumb_name}")
     
     def _calculate_thumb_size(self, context, num_views):
         """Calculate optimal thumbnail size to fit all views + buttons, respecting min/max."""
@@ -1461,7 +1467,7 @@ def _auto_start_gallery():
             with bpy.context.temp_override(window=window, area=area, region=region):
                 bpy.ops.view3d.thumbnail_gallery('INVOKE_DEFAULT')
         except Exception as e:
-            print(f"[ViewPilot] Failed to auto-start gallery: {e}")
+            debug_tools.log(f"failed to auto-start gallery: {e}")
     return None  # Unregister timer
 
 @bpy.app.handlers.persistent
