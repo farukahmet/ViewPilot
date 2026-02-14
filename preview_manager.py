@@ -230,6 +230,14 @@ def get_preview_icon_id(view_name):
     return 0
 
 
+def get_view_icon_id_fast(view_name, thumbnail_image=""):
+    """Fast icon lookup for UI lists without triggering preview refresh work."""
+    icon_id = _get_image_preview_icon_id(thumbnail_image)
+    if icon_id:
+        return icon_id
+    return get_preview_icon_id(view_name)
+
+
 def remove_view_preview(view_name):
     """Forget active preview mapping for a deleted/renamed view."""
     if view_name in _active_preview_ids:

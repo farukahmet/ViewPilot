@@ -37,7 +37,7 @@ class VIEW3D_OT_viewport_controls(bpy.types.Operator):
         
         try:
             popup_width = get_preferences().popup_width
-        except:
+        except Exception:
             popup_width = 300
             
         return context.window_manager.invoke_props_dialog(self, width=popup_width)

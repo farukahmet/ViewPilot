@@ -239,7 +239,7 @@ class VIEW3D_OT_view_history_monitor(bpy.types.Operator):
                 if not in_grace:
                     try:
                         context.scene.viewpilot.reinitialize_from_context(context)
-                    except:
+                    except Exception:
                         pass
 
                     # Detected movement away from the current state.
@@ -252,7 +252,7 @@ class VIEW3D_OT_view_history_monitor(bpy.types.Operator):
                             context.scene.viewpilot.saved_views_enum = 'NONE'
                             _set_panel_gallery_enum_safe(context, 'NONE')
                             controller.skip_enum_load = False
-                        except:
+                        except Exception:
                             controller.skip_enum_load = False
                 else:
                     # We are in a grace period.
@@ -270,7 +270,7 @@ class VIEW3D_OT_view_history_monitor(bpy.types.Operator):
                                  context.scene.viewpilot.saved_views_enum = 'NONE'
                                  _set_panel_gallery_enum_safe(context, 'NONE')
                                  controller.skip_enum_load = False
-                             except:
+                             except Exception:
                                  controller.skip_enum_load = False
 
                     # If this is due to VIEW_RESTORE (loading a view), we should accept this new state
@@ -321,7 +321,7 @@ class VIEW3D_OT_view_history_monitor(bpy.types.Operator):
                 # No movement, but we were moving recently. Check settle timer.
                 try:
                     settle_delay = get_preferences().settle_delay
-                except:
+                except Exception:
                     settle_delay = 0.3
                 if (now - self.settle_start_time) > settle_delay:
                     # Check if we should record this to history
@@ -556,7 +556,7 @@ class VIEW3D_OT_exit_camera_view(bpy.types.Operator):
         # Sync UI properties immediately
         try:
             context.scene.viewpilot.reinitialize_from_context(context)
-        except:
+        except Exception:
             pass
         
         return {'FINISHED'}
@@ -590,7 +590,7 @@ class VIEW3D_OT_create_camera_from_view(bpy.types.Operator):
             camera_name_prefix = prefs.camera_name_prefix
             collection_name = prefs.camera_collection_name
             collection_color = prefs.camera_collection_color
-        except:
+        except Exception:
             passepartout = 0.95
             show_passepartout = True
             show_name = True
@@ -923,7 +923,7 @@ class VIEW3D_OT_save_current_view(bpy.types.Operator):
             view_dict["remember_shading"] = prefs.default_remember_shading
             view_dict["remember_overlays"] = prefs.default_remember_overlays
             view_dict["remember_composition"] = prefs.default_remember_composition
-        except:
+        except Exception:
             pass  # Keep defaults from capture_viewport_as_dict
         
         # Add to JSON storage (auto-syncs to PropertyGroup)
@@ -973,7 +973,7 @@ class VIEW3D_OT_save_current_view(bpy.types.Operator):
             set_skip_enum_load(True)
             _sync_saved_view_enums_safe(context, str(new_index))
             set_skip_enum_load(False)
-        except:
+        except Exception:
              set_skip_enum_load(False)
         
         self.report({'INFO'}, f"Saved view: {view_name}")
@@ -990,18 +990,17 @@ class VIEW3D_OT_load_saved_view(bpy.types.Operator):
     def poll(cls, context):
         from . import data_storage
         views = data_storage.get_saved_views()
-        return (context.space_data and 
-                context.space_data.type == 'VIEW_3D' and
-                len(views) > 0 and
-                context.scene.saved_views_index >= 0)
+        _, space, region = utils.find_view3d_context(context)
+        return bool(space and region and len(views) > 0 and context.scene.saved_views_index >= 0)
     
     def execute(self, context):
         from . import data_storage
-        
-        space = context.space_data
-        region = context.region_data
-        if not region and space and space.type == 'VIEW_3D':
-            region = space.region_3d
+
+        preferred_area = VIEW3D_OT_thumbnail_gallery._context_area
+        _, space, region = utils.find_view3d_context(context, preferred_area=preferred_area)
+        if not space or not region:
+            self.report({'ERROR'}, "No 3D View found")
+            return {'CANCELLED'}
         
         index = context.scene.saved_views_index
         view_dict = data_storage.get_saved_view(index)
@@ -1226,7 +1225,7 @@ class VIEW3D_OT_update_saved_view(bpy.types.Operator):
              set_skip_enum_load(True)
              _sync_saved_view_enums_safe(context, str(index))
              set_skip_enum_load(False)
-        except:
+        except Exception:
              set_skip_enum_load(False)
         
         self.report({'INFO'}, f"Updated view: {view_name}")
@@ -1435,6 +1434,28 @@ class VIEW3D_OT_set_saved_views_index(bpy.types.Operator):
 
 class VIEWPILOT_UL_saved_views_reorder(bpy.types.UIList):
     """UIList for reordering saved views with drag-and-drop."""
+
+    def _get_icon_map(self, context):
+        """Build/reuse icon cache for current saved view ordering."""
+        views = getattr(context.scene, "saved_views", [])
+        signature = tuple((view.name, view.thumbnail_image) for view in views)
+
+        cached_sig = getattr(self, "_icon_cache_signature", None)
+        cached_map = getattr(self, "_icon_cache_map", None)
+        if cached_sig == signature and cached_map is not None:
+            return cached_map
+
+        icon_map = {}
+        try:
+            from .preview_manager import get_view_icon_id_fast
+            for idx, view in enumerate(views):
+                icon_map[idx] = get_view_icon_id_fast(view.name, view.thumbnail_image)
+        except Exception:
+            icon_map = {}
+
+        self._icon_cache_signature = signature
+        self._icon_cache_map = icon_map
+        return icon_map
     
     def draw_item(self, context, layout, data, item, icon, active_data, active_propname, index):
         view = item
@@ -1442,17 +1463,8 @@ class VIEWPILOT_UL_saved_views_reorder(bpy.types.UIList):
             # Main row with split for label and buttons
             row = layout.row(align=True)
             
-            # Try to get thumbnail icon
-            icon_id = 0
-            try:
-                from .preview_manager import get_panel_gallery_items
-                items = get_panel_gallery_items(None, context)
-                for identifier, name, desc, thumb_icon, idx in items:
-                    if idx == index:
-                        icon_id = thumb_icon
-                        break
-            except:
-                pass
+            # Try to get thumbnail icon from cached map.
+            icon_id = self._get_icon_map(context).get(index, 0)
             
             # View name with icon (takes most of the space)
             if icon_id:
