@@ -67,6 +67,7 @@ class ThumbnailRenderer:
         orig_shading_use_scene_lights = shading.use_scene_lights
         orig_shading_use_scene_world = shading.use_scene_world
         orig_world = context.scene.world
+        orig_film_transparent = getattr(context.scene.render, "film_transparent", None)
         
         # Apply saved view's shading settings (if saved_view has them)
         if hasattr(saved_view, 'shading_type') and saved_view.shading_type:
@@ -117,6 +118,11 @@ class ThumbnailRenderer:
                 shading.show_shadows = saved_view.shading_show_shadows
                 shading.use_scene_lights = saved_view.shading_use_scene_lights
                 shading.use_scene_world = saved_view.shading_use_scene_world
+                if hasattr(context.scene.render, "film_transparent") and hasattr(saved_view, 'shading_film_transparent'):
+                    try:
+                        context.scene.render.film_transparent = bool(saved_view.shading_film_transparent)
+                    except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError):
+                        pass
                 # Apply saved World datablock if stored and exists
                 if hasattr(saved_view, 'shading_selected_world') and saved_view.shading_selected_world:
                     if saved_view.shading_selected_world in bpy.data.worlds:
@@ -404,6 +410,11 @@ class ThumbnailRenderer:
             shading.use_scene_lights = orig_shading_use_scene_lights
             shading.use_scene_world = orig_shading_use_scene_world
             context.scene.world = orig_world
+            if orig_film_transparent is not None and hasattr(context.scene.render, "film_transparent"):
+                try:
+                    context.scene.render.film_transparent = orig_film_transparent
+                except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError):
+                    pass
             
             # Restore render settings
             self._restore_rna_scalars(
