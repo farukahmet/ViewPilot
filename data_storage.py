@@ -598,6 +598,7 @@ def capture_viewport_as_dict(space, region, context, name: str = "Saved View") -
         "shading_shadow_intensity": shading.shadow_intensity,
         "shading_use_scene_lights": shading.use_scene_lights,
         "shading_use_scene_world": shading.use_scene_world,
+        "shading_film_transparent": context.scene.render.film_transparent,
         
         # Overlays
         "overlays_show_overlays": overlay.show_overlays,
@@ -685,6 +686,7 @@ def view_to_dict(view: 'bpy.types.PropertyGroup') -> Dict[str, Any]:
         "shading_shadow_intensity": view.shading_shadow_intensity,
         "shading_use_scene_lights": view.shading_use_scene_lights,
         "shading_use_scene_world": view.shading_use_scene_world,
+        "shading_film_transparent": view.shading_film_transparent,
         
         # Overlays
         "overlays_show_overlays": view.overlays_show_overlays,
@@ -834,6 +836,8 @@ def apply_view_to_viewport(view_dict: Dict[str, Any], space, region, context) ->
         shading.shadow_intensity = get("shading_shadow_intensity", 0.5)
         shading.use_scene_lights = get("shading_use_scene_lights", False)
         shading.use_scene_world = get("shading_use_scene_world", False)
+        if "shading_film_transparent" in view_dict:
+            context.scene.render.film_transparent = bool(get("shading_film_transparent", False))
 
         # Apply saved World datablock if stored and exists.
         # Composition is intentionally applied first, so this writes to the target scene.

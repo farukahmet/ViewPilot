@@ -1363,6 +1363,7 @@ class SavedViewItem(bpy.types.PropertyGroup):
     # Material Preview specific
     shading_use_scene_lights: bpy.props.BoolProperty(default=False)
     shading_use_scene_world: bpy.props.BoolProperty(default=False)
+    shading_film_transparent: bpy.props.BoolProperty(default=False)
     
     # =========================================================================
     # VIEW STYLES - Overlays
