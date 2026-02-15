@@ -12,11 +12,10 @@ import gpu
 from gpu_extras.batch import batch_for_shader
 from mathutils import Vector, Quaternion
 from .temp_paths import make_temp_png_path
-from . import debug_tools, utils
+from . import utils
 
 # Module-level backup of draw handler - survives class reload
 _backup_draw_handler = None
-
 
 class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
     """Show saved views as a thumbnail filmstrip overlay"""
@@ -418,10 +417,10 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
                         with bpy.context.temp_override(window=window, area=area, region=region):
                             try:
                                 bpy.ops.view3d.save_current_view()
-                            except RuntimeError as error:
+                            except RuntimeError:
                                 # Save operator may intentionally cancel (e.g. storage invalid).
                                 # Keep gallery modal loop alive without dumping traceback noise.
-                                debug_tools.log(f"save from gallery cancelled: {error}")
+                                pass
                     return {'RUNNING_MODAL'}
             
             # Check Thumbnail Click
@@ -561,7 +560,6 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
             
             views = data_storage.get_saved_views()
             if not views:
-                debug_tools.log("no saved views to regenerate")
                 return
             
             # Track which views were updated for batched save
@@ -571,7 +569,6 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
             space = context.space_data
             region = space.region_3d if space else None
             if not region:
-                debug_tools.log("no region_3d found for thumbnail regeneration")
                 return
             
             # Store actual viewport state
@@ -589,7 +586,6 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
             # Begin a critical update transaction to block other updates
             controller = get_controller()
             if not controller.begin_update(UpdateSource.VIEW_RESTORE, LockPriority.CRITICAL):
-                debug_tools.log("could not acquire lock for thumbnail regeneration")
                 return
             
             # Start a long grace period to prevent history recording during thumbnail regen
@@ -620,7 +616,6 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
                         space = context.space_data
                         region = space.region_3d if space else None
                         if not region:
-                            debug_tools.log(f"lost region_3d after scene switch for view index {i}")
                             continue
                     
                     # Switch to the view's view layer if different
@@ -684,7 +679,7 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
                         space = context.space_data
                         region = space.region_3d if space else None
                 except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError) as restore_err:
-                    debug_tools.log(f"error restoring scene after thumbnail regeneration: {restore_err}")
+                    pass
                 
                 # Restore viewport state
                 if region:
@@ -699,13 +694,13 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
                         else:
                             region.view_perspective = 'ORTHO'
                     except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError) as restore_err:
-                        debug_tools.log(f"error restoring viewport state after thumbnail regeneration: {restore_err}")
+                        pass
                 
                 if space:
                     try:
                         space.lens = original_lens
                     except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError) as restore_err:
-                        debug_tools.log(f"error restoring lens after thumbnail regeneration: {restore_err}")
+                        pass
                 
                 # Restore original view layer
                 try:
@@ -713,14 +708,14 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
                         if context.window.view_layer != original_view_layer:
                             context.window.view_layer = original_view_layer
                 except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError) as restore_err:
-                    debug_tools.log(f"error restoring view layer after thumbnail regeneration: {restore_err}")
+                    pass
                 
                 # Restore saved views index and world
                 try:
                     context.scene.saved_views_index = original_index
                     context.scene.world = original_world
                 except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError) as restore_err:
-                    debug_tools.log(f"error restoring index/world after thumbnail regeneration: {restore_err}")
+                    pass
                 
                 # Reset enum property to match the index
                 try:
@@ -733,7 +728,7 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
                     except (ImportError, AttributeError, TypeError, ValueError, RuntimeError):
                         pass
                 except (TypeError, ValueError, RuntimeError, AttributeError) as restore_err:
-                    debug_tools.log(f"error restoring saved_views_enum after thumbnail regeneration: {restore_err}")
+                    pass
                 finally:
                     controller.skip_enum_load = False
                 
@@ -748,11 +743,9 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
             
             # Reload textures after regeneration
             self._load_textures(context)
-            debug_tools.log(f"regenerated {len(views)} thumbnails")
         except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError, OSError) as e:
             import traceback
             self.report({'ERROR'}, "Error regenerating thumbnails (see console)")
-            debug_tools.log(f"error regenerating thumbnails: {e}")
             traceback.print_exc()
     
     def _load_textures(self, context):
@@ -812,9 +805,9 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
                                 pass
                             
                     except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError, OSError) as e:
-                        debug_tools.log(f"failed to load texture for '{view_dict.get('name', 'View')}': {e}")
+                        pass
                 else:
-                    debug_tools.log(f"image not found for gallery texture load: {thumb_name}")
+                    pass
     
     def _calculate_thumb_size(self, context, num_views):
         """Calculate optimal thumbnail size to fit all views + buttons, respecting min/max."""
@@ -886,10 +879,7 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
             thumb_size_max,
         )
         if self._layout_cache_key == layout_key and self._layout_cache is not None:
-            debug_tools.inc("modal.layout.cache_hit")
             return self._layout_cache
-
-        debug_tools.inc("modal.layout.recompute")
 
         # Calculate adaptive thumbnail size
         thumb_size = self._calculate_thumb_size(context, num_views)
@@ -997,7 +987,6 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
             return
         
         try:
-            debug_tools.inc("modal.draw.calls")
             context = bpy.context
             # Only draw in the primary area (prevents drawing in all 3D views)
             if context.area != VIEW3D_OT_thumbnail_gallery._primary_area:
@@ -1014,119 +1003,118 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
             if space and hasattr(space, 'region_3d') and space.region_3d:
                 if space.region_3d.view_perspective == 'CAMERA':
                     return
-            with debug_tools.timed("modal.draw.total"):
-                layout = self._calculate_layout(context)
-                if not layout:
-                    return
+            layout = self._calculate_layout(context)
+            if not layout:
+                return
 
-                # Unpack layout
-                thumb_size = layout['thumb_size']
-                start_idx = layout['start_idx']
-                end_idx = layout['end_idx']
-                start_x = layout['start_x']
-                start_y = layout['start_y']
-                visible_views = layout['visible_views']
-                thumb_spacing = layout['thumb_spacing']
+            # Unpack layout
+            thumb_size = layout['thumb_size']
+            start_idx = layout['start_idx']
+            end_idx = layout['end_idx']
+            start_x = layout['start_x']
+            start_y = layout['start_y']
+            visible_views = layout['visible_views']
+            thumb_spacing = layout['thumb_spacing']
 
-                # Update class state
-                self._thumb_size = thumb_size
+            # Update class state
+            self._thumb_size = thumb_size
 
-                # --- DRAW THUMBNAILS (CENTER) ---
-                thumbs_start_x = start_x
-                from . import data_storage
-                current_idx = context.scene.saved_views_index
-                num_views = len(data_storage.get_saved_views())
+            # --- DRAW THUMBNAILS (CENTER) ---
+            thumbs_start_x = start_x
+            from . import data_storage
+            current_idx = context.scene.saved_views_index
+            num_views = len(data_storage.get_saved_views())
 
-                # Track hidden view range for scroll indicators
-                first_thumb_pos = None
-                last_thumb_pos = None
+            # Track hidden view range for scroll indicators
+            first_thumb_pos = None
+            last_thumb_pos = None
 
-                for draw_pos, i in enumerate(range(start_idx, end_idx)):
-                    x = thumbs_start_x + draw_pos * thumb_spacing
-                    y = start_y + self.THUMB_PADDING
+            for draw_pos, i in enumerate(range(start_idx, end_idx)):
+                x = thumbs_start_x + draw_pos * thumb_spacing
+                y = start_y + self.THUMB_PADDING
 
-                    if draw_pos == 0:
-                        first_thumb_pos = (x, y)
-                    last_thumb_pos = (x, y)
+                if draw_pos == 0:
+                    first_thumb_pos = (x, y)
+                last_thumb_pos = (x, y)
 
-                    # Draw content first
-                    if i in self._textures:
-                        self._draw_texture(self._textures[i], x, y, self._thumb_size, self._thumb_size)
-                    else:
-                        self._draw_placeholder(x, y, self._thumb_size, self._thumb_size, i + 1)
+                # Draw content first
+                if i in self._textures:
+                    self._draw_texture(self._textures[i], x, y, self._thumb_size, self._thumb_size)
+                else:
+                    self._draw_placeholder(x, y, self._thumb_size, self._thumb_size, i + 1)
 
-                    self._draw_border(x, y, self._thumb_size, self._thumb_size)
+                self._draw_border(x, y, self._thumb_size, self._thumb_size)
 
-                    # Draw highlight border on top (at exact thumbnail position)
-                    if i == current_idx:
-                        self._draw_selection_highlight(x, y, self._thumb_size, self._thumb_size)
-                    elif i == self._hover_index:
-                        self._draw_hover_highlight(x, y, self._thumb_size, self._thumb_size)
+                # Draw highlight border on top (at exact thumbnail position)
+                if i == current_idx:
+                    self._draw_selection_highlight(x, y, self._thumb_size, self._thumb_size)
+                elif i == self._hover_index:
+                    self._draw_hover_highlight(x, y, self._thumb_size, self._thumb_size)
 
-                    if i == self._hover_index:
-                        self._draw_view_name(context, x, y, self._thumb_size, i)
+                if i == self._hover_index:
+                    self._draw_view_name(context, x, y, self._thumb_size, i)
 
-                # --- DRAW PLUS BUTTON (RIGHT) ---
-                plus_x = thumbs_start_x + (visible_views * thumb_spacing)
-                plus_y = start_y + self.THUMB_PADDING
+            # --- DRAW PLUS BUTTON (RIGHT) ---
+            plus_x = thumbs_start_x + (visible_views * thumb_spacing)
+            plus_y = start_y + self.THUMB_PADDING
 
-                self._plus_btn_rect = (plus_x, plus_y, self._thumb_size, self._thumb_size)
+            self._plus_btn_rect = (plus_x, plus_y, self._thumb_size, self._thumb_size)
 
-                # Transparent background for + button
-                self._draw_placeholder(plus_x, plus_y, self._thumb_size, self._thumb_size, -1, color=(0.1, 0.1, 0.1, 0.0))
+            # Transparent background for + button
+            self._draw_placeholder(plus_x, plus_y, self._thumb_size, self._thumb_size, -1, color=(0.1, 0.1, 0.1, 0.0))
 
-                # Dashed border - match refresh/close button colors
-                border_color = (1.0, 1.0, 1.0, 1.0) if self._plus_hover else (0.5, 0.5, 0.5, 0.8)
-                self._draw_dashed_border(plus_x, plus_y, self._thumb_size, self._thumb_size, color=border_color)
+            # Dashed border - match refresh/close button colors
+            border_color = (1.0, 1.0, 1.0, 1.0) if self._plus_hover else (0.5, 0.5, 0.5, 0.8)
+            self._draw_dashed_border(plus_x, plus_y, self._thumb_size, self._thumb_size, color=border_color)
 
-                # Icon color - match refresh/close button colors
-                icon_color = (1.0, 1.0, 1.0, 1.0) if self._plus_hover else (0.5, 0.5, 0.5, 0.8)
-                self._draw_icon_shape(plus_x, plus_y, self._thumb_size, 'PLUS', color=icon_color)
+            # Icon color - match refresh/close button colors
+            icon_color = (1.0, 1.0, 1.0, 1.0) if self._plus_hover else (0.5, 0.5, 0.5, 0.8)
+            self._draw_icon_shape(plus_x, plus_y, self._thumb_size, 'PLUS', color=icon_color)
 
-                # --- DRAW ACTION PANEL (FAR RIGHT) ---
-                # Half-width panel with refresh (top), reorder (middle), and close (bottom) buttons
-                action_panel_width = int(self._thumb_size * 0.5)
-                action_btn_height = int(self._thumb_size / 3)  # 3 buttons
-                action_panel_x = plus_x + self._thumb_size + self.THUMB_PADDING
+            # --- DRAW ACTION PANEL (FAR RIGHT) ---
+            # Half-width panel with refresh (top), reorder (middle), and close (bottom) buttons
+            action_panel_width = int(self._thumb_size * 0.5)
+            action_btn_height = int(self._thumb_size / 3)  # 3 buttons
+            action_panel_x = plus_x + self._thumb_size + self.THUMB_PADDING
 
-                # Refresh All button (top third)
-                refresh_x = action_panel_x
-                refresh_y = start_y + self.THUMB_PADDING + action_btn_height * 2
-                self._refresh_btn_rect = (refresh_x, refresh_y, action_panel_width, action_btn_height)
+            # Refresh All button (top third)
+            refresh_x = action_panel_x
+            refresh_y = start_y + self.THUMB_PADDING + action_btn_height * 2
+            self._refresh_btn_rect = (refresh_x, refresh_y, action_panel_width, action_btn_height)
 
-                refresh_color = (1.0, 1.0, 1.0, 1.0) if self._refresh_hover else (0.5, 0.5, 0.5, 0.8)
-                self._draw_icon_shape(refresh_x, refresh_y, min(action_panel_width, action_btn_height), 'REFRESH', color=refresh_color, size_multiplier=0.7)
+            refresh_color = (1.0, 1.0, 1.0, 1.0) if self._refresh_hover else (0.5, 0.5, 0.5, 0.8)
+            self._draw_icon_shape(refresh_x, refresh_y, min(action_panel_width, action_btn_height), 'REFRESH', color=refresh_color, size_multiplier=0.7)
 
-                # Reorder button (middle third)
-                reorder_x = action_panel_x
-                reorder_y = start_y + self.THUMB_PADDING + action_btn_height
-                self._reorder_btn_rect = (reorder_x, reorder_y, action_panel_width, action_btn_height)
+            # Reorder button (middle third)
+            reorder_x = action_panel_x
+            reorder_y = start_y + self.THUMB_PADDING + action_btn_height
+            self._reorder_btn_rect = (reorder_x, reorder_y, action_panel_width, action_btn_height)
 
-                reorder_color = (1.0, 1.0, 1.0, 1.0) if self._reorder_hover else (0.5, 0.5, 0.5, 0.8)
-                self._draw_icon_shape(reorder_x, reorder_y, min(action_panel_width, action_btn_height), 'REORDER', color=reorder_color, size_multiplier=0.7)
+            reorder_color = (1.0, 1.0, 1.0, 1.0) if self._reorder_hover else (0.5, 0.5, 0.5, 0.8)
+            self._draw_icon_shape(reorder_x, reorder_y, min(action_panel_width, action_btn_height), 'REORDER', color=reorder_color, size_multiplier=0.7)
 
-                # Close Gallery button (bottom third)
-                close_x = action_panel_x
-                close_y = start_y + self.THUMB_PADDING
-                self._close_btn_rect = (close_x, close_y, action_panel_width, action_btn_height)
+            # Close Gallery button (bottom third)
+            close_x = action_panel_x
+            close_y = start_y + self.THUMB_PADDING
+            self._close_btn_rect = (close_x, close_y, action_panel_width, action_btn_height)
 
-                close_color = (1.0, 1.0, 1.0, 1.0) if self._close_hover else (0.5, 0.5, 0.5, 0.8)
-                self._draw_icon_shape(close_x, close_y, min(action_panel_width, action_btn_height), 'CLOSE', color=close_color, size_multiplier=0.8)
+            close_color = (1.0, 1.0, 1.0, 1.0) if self._close_hover else (0.5, 0.5, 0.5, 0.8)
+            self._draw_icon_shape(close_x, close_y, min(action_panel_width, action_btn_height), 'CLOSE', color=close_color, size_multiplier=0.8)
 
-                # --- SCROLL INDICATORS ---
-                hidden_left = start_idx
-                hidden_right = num_views - end_idx
+            # --- SCROLL INDICATORS ---
+            hidden_left = start_idx
+            hidden_right = num_views - end_idx
 
-                if hidden_left > 0 and first_thumb_pos:
-                    self._draw_scroll_indicator(first_thumb_pos[0], first_thumb_pos[1],
-                                                self._thumb_size, self._thumb_size, hidden_left, 'LEFT')
-                if hidden_right > 0 and last_thumb_pos:
-                    self._draw_scroll_indicator(last_thumb_pos[0], last_thumb_pos[1],
-                                                self._thumb_size, self._thumb_size, hidden_right, 'RIGHT')
+            if hidden_left > 0 and first_thumb_pos:
+                self._draw_scroll_indicator(first_thumb_pos[0], first_thumb_pos[1],
+                                            self._thumb_size, self._thumb_size, hidden_left, 'LEFT')
+            if hidden_right > 0 and last_thumb_pos:
+                self._draw_scroll_indicator(last_thumb_pos[0], last_thumb_pos[1],
+                                            self._thumb_size, self._thumb_size, hidden_right, 'RIGHT')
 
-                # --- ENLARGED PREVIEW (MMB) ---
-                if self._preview_index >= 0 and self._preview_index in self._textures:
-                    self._draw_enlarged_preview(context, self._preview_index)
+            # --- ENLARGED PREVIEW (MMB) ---
+            if self._preview_index >= 0 and self._preview_index in self._textures:
+                self._draw_enlarged_preview(context, self._preview_index)
                 
         except ReferenceError:
             # Operator instance has been garbage collected
@@ -1405,7 +1393,6 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
         blf.color(font_id, 1.0, 1.0, 1.0, 0.9)
         blf.draw(font_id, view_name)
 
-
 def _reset_gallery_state():
     """Reset gallery class state - called on file load and addon reload."""
     global _backup_draw_handler
@@ -1461,7 +1448,6 @@ def _reset_gallery_state():
     # Force redraw all 3D views to clear any stale gallery overlay.
     utils.tag_redraw_all_view3d(bpy.context)
 
-
 def _auto_start_gallery():
     """Timer callback to start the gallery."""
     # Don't toggle if already active (prevents race condition on fresh files)
@@ -1475,7 +1461,7 @@ def _auto_start_gallery():
             with bpy.context.temp_override(window=window, area=area, region=region):
                 bpy.ops.view3d.thumbnail_gallery('INVOKE_DEFAULT')
         except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError) as e:
-            debug_tools.log(f"failed to auto-start gallery: {e}")
+            pass
     return None  # Unregister timer
 
 @bpy.app.handlers.persistent
@@ -1491,7 +1477,6 @@ def _on_load_post(dummy):
         return  # Don't auto-start if we can't read preference (safer default)
     # Auto-enable gallery after a short delay to ensure context is ready
     bpy.app.timers.register(_auto_start_gallery, first_interval=0.5)
-
 
 # =============================================================================
 # CONTEXT MENU FOR GALLERY THUMBNAILS
@@ -1558,7 +1543,6 @@ class VIEW3D_MT_gallery_context(bpy.types.Menu):
             flip_icon = 'TRIA_DOWN' if instance._flip_to_top else 'TRIA_UP'
             layout.operator("view3d.gallery_flip_position", text=flip_text, icon=flip_icon)
 
-
 class VIEW3D_OT_gallery_close(bpy.types.Operator):
     """Close the thumbnail gallery"""
     bl_idname = "view3d.gallery_close"
@@ -1571,7 +1555,6 @@ class VIEW3D_OT_gallery_close(bpy.types.Operator):
             if VIEW3D_OT_thumbnail_gallery._instance:
                 VIEW3D_OT_thumbnail_gallery._instance._cleanup(context)
         return {'FINISHED'}
-
 
 class VIEW3D_OT_gallery_flip_position(bpy.types.Operator):
     """Flip gallery between top and bottom of viewport"""
@@ -1587,7 +1570,6 @@ class VIEW3D_OT_gallery_flip_position(bpy.types.Operator):
             context.area.tag_redraw()
         return {'FINISHED'}
 
-
 class VIEW3D_OT_gallery_load_view(bpy.types.Operator):
     """Navigate to this saved view"""
     bl_idname = "view3d.gallery_load_view"
@@ -1602,9 +1584,6 @@ class VIEW3D_OT_gallery_load_view(bpy.types.Operator):
         if 0 <= self.index < len(views):
             context.scene.viewpilot.saved_views_enum = str(self.index)
         return {'FINISHED'}
-
-
-
 
 class VIEW3D_OT_gallery_delete_view(bpy.types.Operator):
     """Delete this saved view"""
@@ -1625,7 +1604,6 @@ class VIEW3D_OT_gallery_delete_view(bpy.types.Operator):
         if 'FINISHED' in result:
             return {'FINISHED'}
         return {'CANCELLED'}
-
 
 class VIEW3D_OT_gallery_view_to_camera(bpy.types.Operator):
     """Create a camera at this view's position"""
@@ -1715,7 +1693,6 @@ class VIEW3D_OT_gallery_view_to_camera(bpy.types.Operator):
         self.report({'INFO'}, f"Created camera: {view_dict.get('name', 'View')}")
         return {'FINISHED'}
 
-
 def register():
     bpy.utils.register_class(VIEW3D_OT_thumbnail_gallery)
     bpy.utils.register_class(VIEW3D_MT_gallery_context)
@@ -1736,7 +1713,6 @@ def register():
             bpy.app.timers.register(_auto_start_gallery, first_interval=0.5)
     except (ImportError, AttributeError, TypeError, ValueError, RuntimeError):
         pass
-
 
 def unregister():
     # Clean up any running gallery before unregistering

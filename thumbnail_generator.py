@@ -19,17 +19,14 @@ import glob
 import os
 import traceback
 
-from . import utils, debug_tools
+from . import utils
 from .temp_paths import make_temp_png_path
 
-
 THUMBNAIL_RENDERER_VERSION = "2026-02-11-write-still"
-
 
 def _temp_thumbnail_path(image_name):
     """Get a deterministic temp path for OpenGL thumbnail output."""
     return make_temp_png_path("_vp_thumb_", image_name)
-
 
 class ThumbnailRenderer:
     """
@@ -47,7 +44,6 @@ class ThumbnailRenderer:
         """
         area, space, region = self._find_view3d_context(context)
         if not all([area, space, region]):
-            debug_tools.log("no valid 3D view found for thumbnail rendering")
             return None
         
         # Store original shading settings
@@ -126,7 +122,7 @@ class ThumbnailRenderer:
                     if saved_view.shading_selected_world in bpy.data.worlds:
                         context.scene.world = bpy.data.worlds[saved_view.shading_selected_world]
             except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError) as e:
-                debug_tools.log(f"could not apply saved shading: {e}")
+                pass
         
         # Detect Cycles RENDERED mode (can't capture - use SOLID fallback)
         is_cycles_rendered = (
@@ -413,18 +409,18 @@ class ThumbnailRenderer:
             self._restore_rna_scalars(
                 context.scene.display_settings,
                 orig_scene_display_settings_state,
-                debug_prefix="restore scene.display_settings",
+                restore_label="restore scene.display_settings",
             )
             self._restore_rna_scalars(
                 context.scene.view_settings,
                 orig_scene_view_settings_state,
-                debug_prefix="restore scene.view_settings",
+                restore_label="restore scene.view_settings",
                 priority=("view_transform", "look", "exposure", "gamma"),
             )
             self._restore_curve_mapping(
                 context.scene.view_settings,
                 orig_scene_curve_mapping_state,
-                debug_prefix="restore scene.view_settings.curve_mapping",
+                restore_label="restore scene.view_settings.curve_mapping",
             )
             # Explicit pass for color-management chain (handles enum edge cases).
             self._set_enum_value(
@@ -468,26 +464,26 @@ class ThumbnailRenderer:
             self._restore_rna_scalars(
                 image_settings,
                 orig_image_settings_state,
-                debug_prefix="restore image_settings",
+                restore_label="restore image_settings",
                 priority=("media_type", "file_format", "color_mode", "color_depth"),
             )
             if orig_image_display_settings_state and hasattr(image_settings, "display_settings"):
                 self._restore_rna_scalars(
                     image_settings.display_settings,
                     orig_image_display_settings_state,
-                    debug_prefix="restore image_settings.display_settings",
+                    restore_label="restore image_settings.display_settings",
                 )
             if orig_image_view_settings_state and hasattr(image_settings, "view_settings"):
                 self._restore_rna_scalars(
                     image_settings.view_settings,
                     orig_image_view_settings_state,
-                    debug_prefix="restore image_settings.view_settings",
+                    restore_label="restore image_settings.view_settings",
                     priority=("view_transform", "look", "exposure", "gamma"),
                 )
                 self._restore_curve_mapping(
                     image_settings.view_settings,
                     orig_image_curve_mapping_state,
-                    debug_prefix="restore image_settings.view_settings.curve_mapping",
+                    restore_label="restore image_settings.view_settings.curve_mapping",
                 )
             # Explicit pass for override color-management chain.
             self._set_enum_value(
@@ -572,18 +568,17 @@ class ThumbnailRenderer:
         except (AttributeError, TypeError, ValueError, RuntimeError):
             return False
 
-    def _set_enum_value(self, rna_owner, prop_name, value, debug_prefix):
-        """Set an enum/string property directly with focused debug on failure."""
+    def _set_enum_value(self, rna_owner, prop_name, value, restore_label):
+        """Set an enum/string property directly."""
         if value is None:
             return
         try:
             setattr(rna_owner, prop_name, value)
             return
         except (AttributeError, TypeError, ValueError, RuntimeError):
-            debug_tools.log(f"{debug_prefix} failed to restore '{prop_name}'")
             return
 
-    def _restore_rna_scalars(self, rna_owner, state, debug_prefix="", priority=()):
+    def _restore_rna_scalars(self, rna_owner, state, restore_label="", priority=()):
         """Restore scalar RNA state with dependency-aware ordering."""
         if not state:
             return
@@ -632,7 +627,7 @@ class ThumbnailRenderer:
         except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError):
             return None
 
-    def _restore_curve_mapping(self, view_settings, snapshot, debug_prefix=""):
+    def _restore_curve_mapping(self, view_settings, snapshot, restore_label=""):
         """Restore color-management curve mapping from snapshot."""
         if not snapshot:
             return
@@ -680,14 +675,12 @@ class ThumbnailRenderer:
 
             return utils.find_view3d_override_context(context, preferred_area=preferred_area)
         except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError) as e:
-            debug_tools.log(f"error finding 3D view context: {e}")
             return None, None, None
     
     def _load_from_file(self, filepath, image_name):
         """Load the rendered PNG and prepare it for display."""
         try:
             if not filepath or not os.path.exists(filepath):
-                debug_tools.log(f"thumbnail file missing: {filepath}")
                 return False
 
             img = bpy.data.images.get(image_name)
@@ -721,10 +714,8 @@ class ThumbnailRenderer:
             print(f"[ViewPilot] Error loading thumbnail from file: {e}")
             return False
 
-
 # Module-level instance
 _renderer = None
-
 
 def get_renderer(size=256):
     """Get or create the thumbnail renderer."""
@@ -732,7 +723,6 @@ def get_renderer(size=256):
     if _renderer is None or _renderer.size != size:
         _renderer = ThumbnailRenderer(size)
     return _renderer
-
 
 def generate_thumbnail(context, saved_view, name_suffix=None, refresh_preview=True):
     """Generate a thumbnail for a saved view."""
@@ -752,7 +742,6 @@ def generate_thumbnail(context, saved_view, name_suffix=None, refresh_preview=Tr
             pass  # Panel gallery refresh is optional
     
     return result
-
 
 def delete_thumbnail(view_name):
     """Delete the thumbnail image for a saved view."""

@@ -9,7 +9,7 @@ import os
 import bpy
 import bpy.utils.previews
 
-from . import debug_tools, utils
+from . import utils
 from .temp_paths import make_temp_png_path, sanitize_token
 
 # Global storage for preview collections and per-view active preview ids.
@@ -22,7 +22,6 @@ _icon_retry_queued = False
 _is_registered = False
 _panel_items_cache = []
 _panel_items_signature = None
-
 
 def _remove_handler_variants(handler_list, handler, include_current=False):
     """Remove stale handler variants by function identity/name/module.
@@ -53,7 +52,6 @@ def _remove_handler_variants(handler_list, handler, include_current=False):
             pass
     return removed
 
-
 def _unregister_reload_operator_variants(include_current=False):
     """Unregister stale reload operator class variants after hot reload."""
     class_name = VIEWPILOT_OT_reload_previews.__name__
@@ -70,13 +68,11 @@ def _unregister_reload_operator_variants(include_current=False):
     except (RuntimeError, ValueError, AttributeError):
         return 0
 
-
 def _next_preview_id(view_name):
     """Generate a unique preview id for incremental replacement."""
     global _preview_serial
     _preview_serial += 1
     return f"vp_{sanitize_token(view_name)}_{_preview_serial}"
-
 
 def _compute_panel_items_signature(saved_views):
     """Build a signature for panel icon enum item caching."""
@@ -89,7 +85,6 @@ def _compute_panel_items_signature(saved_views):
     )
     preview_sig = tuple(sorted(_active_preview_ids.items()))
     return (view_sig, preview_sig)
-
 
 def _compute_saved_views_signature():
     """Build a cheap signature so undo/redo refresh only runs when needed."""
@@ -110,7 +105,6 @@ def _compute_saved_views_signature():
         )
     return tuple(signature)
 
-
 def _preview_cache_out_of_sync(signature):
     """Return True when preview mappings don't match current saved views."""
     expected_names = [entry[0] for entry in signature]
@@ -120,7 +114,6 @@ def _preview_cache_out_of_sync(signature):
     try:
         pcoll = get_preview_collection()
     except (RuntimeError, ReferenceError, AttributeError, ValueError) as error:
-        debug_tools.log(f"preview cache sync check failed: {error}")
         return True
 
     for view_name in expected_names:
@@ -131,12 +124,10 @@ def _preview_cache_out_of_sync(signature):
             return True
     return False
 
-
 def _mark_saved_views_signature():
     """Update the cached signature for change detection."""
     global _last_saved_views_signature
     _last_saved_views_signature = _compute_saved_views_signature()
-
 
 def _request_gallery_refresh():
     """Request modal gallery texture reload if it is active."""
@@ -148,11 +139,9 @@ def _request_gallery_refresh():
     except (ImportError, RuntimeError, ReferenceError, AttributeError):
         pass
 
-
 def _tag_view3d_redraw():
     """Request redraw in all 3D view areas so panel icon updates become visible."""
     utils.tag_redraw_all_view3d(bpy.context)
-
 
 def _queue_panel_icon_retry():
     """Retry panel icon refresh once when preview icon ids are still pending."""
@@ -171,7 +160,6 @@ def _queue_panel_icon_retry():
 
     bpy.app.timers.register(_retry, first_interval=0.15)
 
-
 def _queue_undo_refresh(reason):
     """Queue a one-shot refresh after undo/redo changes saved views."""
     global _undo_refresh_queued
@@ -188,15 +176,13 @@ def _queue_undo_refresh(reason):
             if context and hasattr(context, 'scene') and context.scene:
                 reload_all_previews(context)
                 _request_gallery_refresh()
-                debug_tools.log(f"undo/redo preview refresh applied ({reason})")
         except (RuntimeError, ReferenceError, AttributeError, ValueError) as e:
-            debug_tools.log(f"undo/redo preview refresh failed ({reason}): {e}")
+            pass
         finally:
             _mark_saved_views_signature()
         return None
 
     bpy.app.timers.register(_delayed_refresh, first_interval=0.05)
-
 
 def _write_preview_temp_file(image, view_name):
     """Export a packed blender image to temp file for preview loading."""
@@ -208,7 +194,7 @@ def _write_preview_temp_file(image, view_name):
         if os.path.exists(temp_path):
             return temp_path
     except (RuntimeError, OSError, AttributeError, ReferenceError, ValueError) as e:
-        debug_tools.log(f"preview temp export failed for '{view_name}': {e}")
+        pass
     
     # Fallback path: direct image save. This avoids cases where save_render()
     # emits warnings and returns without producing a file.
@@ -221,7 +207,7 @@ def _write_preview_temp_file(image, view_name):
         if os.path.exists(temp_path):
             return temp_path
     except (RuntimeError, OSError, AttributeError, ReferenceError, ValueError) as e:
-        debug_tools.log(f"preview temp direct save failed for '{view_name}': {e}")
+        pass
     finally:
         try:
             image.filepath_raw = orig_filepath_raw
@@ -231,18 +217,15 @@ def _write_preview_temp_file(image, view_name):
     
     return None
 
-
 def get_preview_collection():
     """Get the ViewPilot preview collection, creating if needed."""
     if "viewpilot_previews" not in preview_collections:
         preview_collections["viewpilot_previews"] = bpy.utils.previews.new()
     return preview_collections["viewpilot_previews"]
 
-
 def load_view_preview(view_name, thumbnail_path, replace_existing=True):
     """Load or replace a thumbnail image in the preview collection."""
     if not thumbnail_path or not os.path.exists(thumbnail_path):
-        debug_tools.log(f"preview load skipped for '{view_name}': missing file '{thumbnail_path}'")
         return 0
 
     pcoll = get_preview_collection()
@@ -271,9 +254,7 @@ def load_view_preview(view_name, thumbnail_path, replace_existing=True):
             _queue_panel_icon_retry()
         return icon_id
     except (RuntimeError, OSError, AttributeError, ReferenceError, ValueError) as e:
-        debug_tools.log(f"could not load preview for '{view_name}': {e}")
         return 0
-
 
 def get_preview_icon_id(view_name):
     """Get the icon id for a view preview, or 0 if unavailable."""
@@ -283,7 +264,6 @@ def get_preview_icon_id(view_name):
         return pcoll[preview_id].icon_id
     return 0
 
-
 def get_view_icon_id_fast(view_name, thumbnail_image=""):
     """Fast icon lookup for UI lists without triggering preview refresh work."""
     icon_id = _get_image_preview_icon_id(thumbnail_image)
@@ -291,13 +271,11 @@ def get_view_icon_id_fast(view_name, thumbnail_image=""):
         return icon_id
     return get_preview_icon_id(view_name)
 
-
 def remove_view_preview(view_name):
     """Forget active preview mapping for a deleted/renamed view."""
     if view_name in _active_preview_ids:
         del _active_preview_ids[view_name]
     invalidate_panel_gallery_cache()
-
 
 def _resolve_thumbnail_image_name(view_name):
     """Resolve thumbnail image datablock name for a saved view."""
@@ -315,10 +293,9 @@ def _resolve_thumbnail_image_name(view_name):
             if thumb_name and bpy.data.images.get(thumb_name):
                 return thumb_name
     except (RuntimeError, ReferenceError, AttributeError, ValueError) as error:
-        debug_tools.log(f"thumbnail image name resolve failed for '{view_name}': {error}")
+        pass
 
     return direct_name
-
 
 def _get_image_preview_icon_id(image_name):
     """Return icon_id from an Image datablock preview, or 0 if unavailable."""
@@ -338,67 +315,53 @@ def _get_image_preview_icon_id(image_name):
         pass
     return 0
 
-
 def refresh_view_preview(view_name):
     """Refresh only one view preview after thumbnail regeneration."""
-    debug_tools.inc("preview.refresh_one")
 
     image_name = _resolve_thumbnail_image_name(view_name)
     img = bpy.data.images.get(image_name)
     if not img:
-        debug_tools.inc("preview.refresh_one.no_image")
         return 0
 
-    with debug_tools.timed("preview.refresh_one.total"):
-        temp_path = _write_preview_temp_file(img, view_name)
-        if not temp_path:
-            debug_tools.inc("preview.refresh_one.write_failed")
-            return 0
+    temp_path = _write_preview_temp_file(img, view_name)
+    if not temp_path:
+        return 0
 
-        icon_id = load_view_preview(view_name, temp_path, replace_existing=True)
-        # Always invalidate cache after a load attempt so enum rebuild can
-        # pick up asynchronous icon_id updates.
-        invalidate_panel_gallery_cache()
+    icon_id = load_view_preview(view_name, temp_path, replace_existing=True)
+    # Always invalidate cache after a load attempt so enum rebuild can
+    # pick up asynchronous icon_id updates.
+    invalidate_panel_gallery_cache()
 
-        if icon_id:
-            debug_tools.inc("preview.refresh_one.success")
-        else:
-            debug_tools.inc("preview.refresh_one.load_failed")
-            _queue_panel_icon_retry()
-        return icon_id
-
+    if not icon_id:
+        _queue_panel_icon_retry()
+    return icon_id
 
 def reload_all_previews(context):
     """Reload all view previews from packed blender images."""
     from . import data_storage
     global _preview_serial
 
-    debug_tools.inc("preview.reload_all")
+    pcoll = get_preview_collection()
+    pcoll.clear()
+    _active_preview_ids.clear()
+    _preview_serial = 0
 
-    with debug_tools.timed("preview.reload_all.total"):
-        pcoll = get_preview_collection()
-        pcoll.clear()
-        _active_preview_ids.clear()
-        _preview_serial = 0
+    loaded = 0
+    for view_dict in data_storage.get_saved_views():
+        view_name = view_dict.get("name", "View")
+        image_name = view_dict.get("thumbnail_image", "") or f".VP_Thumb_{view_name}"
+        img = bpy.data.images.get(image_name)
+        if not img:
+            continue
 
-        loaded = 0
-        for view_dict in data_storage.get_saved_views():
-            view_name = view_dict.get("name", "View")
-            image_name = view_dict.get("thumbnail_image", "") or f".VP_Thumb_{view_name}"
-            img = bpy.data.images.get(image_name)
-            if not img:
-                continue
+        temp_path = _write_preview_temp_file(img, view_name)
+        if not temp_path:
+            continue
 
-            temp_path = _write_preview_temp_file(img, view_name)
-            if not temp_path:
-                continue
+        if load_view_preview(view_name, temp_path, replace_existing=True):
+            loaded += 1
 
-            if load_view_preview(view_name, temp_path, replace_existing=True):
-                loaded += 1
-
-        invalidate_panel_gallery_cache()
-        debug_tools.log(f"previews reloaded: {loaded}")
-
+    invalidate_panel_gallery_cache()
 
 def invalidate_panel_gallery_cache():
     """Invalidate panel icon view state."""
@@ -406,7 +369,6 @@ def invalidate_panel_gallery_cache():
     _panel_items_cache = []
     _panel_items_signature = None
     _tag_view3d_redraw()
-
 
 def get_panel_gallery_items(self, context):
     """Generate enum items for panel gallery template_icon_view."""
@@ -418,10 +380,7 @@ def get_panel_gallery_items(self, context):
     signature = _compute_panel_items_signature(saved_views)
 
     if _panel_items_signature == signature and _panel_items_cache:
-        debug_tools.inc("enum.panel_gallery.cache_hit")
         return _panel_items_cache
-
-    debug_tools.inc("enum.panel_gallery.items_build")
 
     items = []
     has_pending_icons = False
@@ -465,7 +424,6 @@ def get_panel_gallery_items(self, context):
         _queue_panel_icon_retry()
     return items
 
-
 class VIEWPILOT_OT_reload_previews(bpy.types.Operator):
     """Reload thumbnail previews for panel gallery"""
     bl_idname = "viewpilot.reload_previews"
@@ -478,7 +436,6 @@ class VIEWPILOT_OT_reload_previews(bpy.types.Operator):
         self.report({'INFO'}, f"Reloaded {len(data_storage.get_saved_views())} previews")
         return {'FINISHED'}
 
-
 @bpy.app.handlers.persistent
 def on_file_load(dummy):
     """Reload previews when a file is opened."""
@@ -490,13 +447,12 @@ def on_file_load(dummy):
                 reload_all_previews(context)
                 _request_gallery_refresh()
         except (RuntimeError, ReferenceError, AttributeError, ValueError) as error:
-            debug_tools.log(f"load_post preview reload failed: {error}")
+            pass
         finally:
             _mark_saved_views_signature()
         return None  # Don't repeat
     
     bpy.app.timers.register(delayed_reload, first_interval=0.5)
-
 
 @bpy.app.handlers.persistent
 def on_undo_post(dummy):
@@ -507,7 +463,6 @@ def on_undo_post(dummy):
         return
     _queue_undo_refresh("undo")
 
-
 @bpy.app.handlers.persistent
 def on_redo_post(dummy):
     """Refresh previews after redo only when saved views actually changed."""
@@ -516,7 +471,6 @@ def on_redo_post(dummy):
         not _preview_cache_out_of_sync(current_signature)):
         return
     _queue_undo_refresh("redo")
-
 
 def register():
     """Initialize preview collection."""
@@ -534,7 +488,7 @@ def register():
         try:
             bpy.utils.previews.remove(preview_collections["viewpilot_previews"])
         except (RuntimeError, ReferenceError, ValueError, AttributeError) as error:
-            debug_tools.log(f"preview collection removal before register failed: {error}")
+            pass
         preview_collections.pop("viewpilot_previews", None)
 
     preview_collections["viewpilot_previews"] = bpy.utils.previews.new()
@@ -556,7 +510,6 @@ def register():
     _panel_items_cache = []
     _panel_items_signature = None
     _is_registered = True
-
 
 def unregister():
     """Clean up preview collection."""

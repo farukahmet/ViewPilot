@@ -6,7 +6,7 @@ import traceback
 from contextlib import contextmanager
 from mathutils import Vector, Quaternion
 
-from . import utils, debug_tools
+from . import utils
 from .utils import (
     get_current_view_state,
     states_are_similar,
@@ -19,7 +19,6 @@ from .state_controller import get_controller, UpdateSource, LockPriority
 from .preferences import get_preferences
 from .thumbnail_generator import generate_thumbnail, delete_thumbnail
 from .modal_gallery import VIEW3D_OT_thumbnail_gallery
-
 
 # ========================================================================
 # VIEW HISTORY OPERATORS
@@ -48,11 +47,6 @@ class VIEW3D_OT_view_history_monitor(bpy.types.Operator):
     MAINTENANCE_INTERVAL_IDLE = 2.0
 
     def _pass_through_tick(self, tick_start=None):
-        if tick_start is not None:
-            debug_tools.add_timing(
-                "history.monitor.tick.total",
-                (time.perf_counter() - tick_start) * 1000.0
-            )
         return {'PASS_THROUGH'}
 
     def _run_periodic_maintenance(self, context):
@@ -64,8 +58,6 @@ class VIEW3D_OT_view_history_monitor(bpy.types.Operator):
         if current_scene_count != self.last_scene_count:
             if self.last_scene_count > 0:  # Skip initial detection
                 fixed = data_storage.fix_duplicate_scene_uuids()
-                if fixed:
-                    debug_tools.log(f"fixed {fixed} duplicate scene UUID(s)")
                 # Also check for new scenes needing UUIDs
                 for scene in bpy.data.scenes:
                     data_storage.ensure_scene_uuid(scene)
@@ -85,8 +77,6 @@ class VIEW3D_OT_view_history_monitor(bpy.types.Operator):
 
             if current_vl_count != last_vl_count:
                 fixed = data_storage.fix_duplicate_view_layer_uuids(scene)
-                if fixed:
-                    debug_tools.log(f"fixed {fixed} duplicate view layer UUID(s) in '{scene.name}'")
                 # Also ensure new view layers have UUIDs
                 for vl in scene.view_layers:
                     data_storage.ensure_view_layer_uuid(vl)
@@ -128,24 +118,12 @@ class VIEW3D_OT_view_history_monitor(bpy.types.Operator):
     def _maybe_run_periodic_maintenance(self, context, now):
         interval = self._current_maintenance_interval(context)
         if (now - self.last_maintenance_time) < interval:
-            debug_tools.inc("history.monitor.maintenance.skipped")
-            if interval == self.MAINTENANCE_INTERVAL_ACTIVE:
-                debug_tools.inc("history.monitor.maintenance.skipped.active")
-            else:
-                debug_tools.inc("history.monitor.maintenance.skipped.idle")
             return
-        debug_tools.inc("history.monitor.maintenance.run")
-        if interval == self.MAINTENANCE_INTERVAL_ACTIVE:
-            debug_tools.inc("history.monitor.maintenance.run.active")
-        else:
-            debug_tools.inc("history.monitor.maintenance.run.idle")
         self.last_maintenance_time = now
-        with debug_tools.timed("history.monitor.maintenance.total"):
-            self._run_periodic_maintenance(context)
+        self._run_periodic_maintenance(context)
     
     def modal(self, context, event):
         if event.type == 'TIMER':
-            debug_tools.inc("history.monitor.tick")
             tick_start = time.perf_counter()
 
             controller = get_controller()
@@ -156,10 +134,8 @@ class VIEW3D_OT_view_history_monitor(bpy.types.Operator):
             if not context.scene.viewpilot.init_complete:
                 context.scene.viewpilot.reinitialize_from_context(context)
 
-            with debug_tools.timed("history.monitor.capture_state.total"):
-                current_state = get_current_view_state(context)
+            current_state = get_current_view_state(context)
             if not current_state:
-                debug_tools.inc("history.monitor.tick.no_state")
                 return self._pass_through_tick(tick_start)
             
             # Check if we're in a grace period
@@ -186,7 +162,6 @@ class VIEW3D_OT_view_history_monitor(bpy.types.Operator):
                 not props.keep_camera_active and
                 states_are_similar(current_state, self.last_known_state)
             ):
-                debug_tools.inc("history.monitor.tick.fast_path_idle")
                 return self._pass_through_tick(tick_start)
             
             # --- SELECTION CHANGE DETECTION ---
@@ -200,7 +175,6 @@ class VIEW3D_OT_view_history_monitor(bpy.types.Operator):
                     # Selection changed! Disable orbit mode
                     props['orbit_around_selection'] = False
                     props['orbit_initialized'] = False
-                    debug_tools.log("orbit mode auto-disabled (selection changed)")
                 
                 self.last_selection_hash = current_hash
             else:
@@ -253,7 +227,6 @@ class VIEW3D_OT_view_history_monitor(bpy.types.Operator):
             # Initialize if empty (and not in camera view)
             if self.last_known_state is None:
                 self.last_known_state = current_state
-                debug_tools.inc("history.monitor.history.seed")
                 add_to_history(current_state)
                 return self._pass_through_tick(tick_start)
             
@@ -265,9 +238,8 @@ class VIEW3D_OT_view_history_monitor(bpy.types.Operator):
                 if not in_grace:
                     try:
                         context.scene.viewpilot.reinitialize_from_context(context)
-                    except (RuntimeError, ReferenceError, AttributeError, ValueError) as error:
-                        debug_tools.log(f"monitor reinitialize failed outside grace period: {error}")
-
+                    except (RuntimeError, ReferenceError, AttributeError, ValueError):
+                        pass
                     # Detected movement away from the current state.
                     # If we are currently "on" a saved view, mark it as ghost (last active) and reset current index
                     if context.scene.saved_views_index != -1:
@@ -277,26 +249,25 @@ class VIEW3D_OT_view_history_monitor(bpy.types.Operator):
                             with _suppress_saved_view_enum_load():
                                 context.scene.viewpilot.saved_views_enum = 'NONE'
                                 _set_panel_gallery_enum_safe(context, 'NONE')
-                        except (TypeError, ValueError, RuntimeError, AttributeError) as error:
-                            debug_tools.log(f"monitor ghost-mode enum clear failed: {error}")
+                        except (TypeError, ValueError, RuntimeError, AttributeError):
+                            pass
                 else:
                     # We are in a grace period.
-                    
+
                     # Special Case: USER_DRAG (Panel Sliders)
                     # If the user is dragging the UI sliders, we ARE modifying the state.
                     # We should NOT reinitialize (fight the user), but we SHOULD trigger Ghost Mode
                     # because the view is no longer the pristine saved view.
                     if controller.grace_period_source == UpdateSource.USER_DRAG:
                         if context.scene.saved_views_index != -1:
-                             context.scene.viewpilot.last_active_view_index = context.scene.saved_views_index
-                             context.scene.saved_views_index = -1
-                             try:
-                                 with _suppress_saved_view_enum_load():
-                                     context.scene.viewpilot.saved_views_enum = 'NONE'
-                                     _set_panel_gallery_enum_safe(context, 'NONE')
-                             except (TypeError, ValueError, RuntimeError, AttributeError) as error:
-                                 debug_tools.log(f"monitor USER_DRAG enum clear failed: {error}")
-
+                            context.scene.viewpilot.last_active_view_index = context.scene.saved_views_index
+                            context.scene.saved_views_index = -1
+                            try:
+                                with _suppress_saved_view_enum_load():
+                                    context.scene.viewpilot.saved_views_enum = 'NONE'
+                                    _set_panel_gallery_enum_safe(context, 'NONE')
+                            except (TypeError, ValueError, RuntimeError, AttributeError):
+                                pass
                     # If this is due to VIEW_RESTORE (loading a view), we should accept this new state
                     # as the baseline immediately to prevent "Ghost View" triggering once grace ends.
                     if controller.grace_period_source == UpdateSource.VIEW_RESTORE:
@@ -333,10 +304,8 @@ class VIEW3D_OT_view_history_monitor(bpy.types.Operator):
                     if pos_changed or rot_changed:
                         props['orbit_around_selection'] = False
                         props['orbit_initialized'] = False
-                        debug_tools.log("orbit mode auto-disabled (external movement detected)")
 
                 # Movement detected!
-                debug_tools.inc("history.monitor.movement.detected")
                 self.is_moving = True
                 self.settle_start_time = now
                 self.last_known_state = current_state
@@ -351,13 +320,7 @@ class VIEW3D_OT_view_history_monitor(bpy.types.Operator):
                     # Check if we should record this to history
                     # (suppressed during VIEW_RESTORE, HISTORY_NAV, or grace periods)
                     if controller.should_record_history():
-                        debug_tools.inc("history.monitor.history.record_allowed")
-                        debug_tools.log(f"history saved (size={len(utils.view_history)})")
-                        with debug_tools.timed("history.monitor.history_add.total"):
-                            add_to_history(current_state)
-                        debug_tools.inc("history.monitor.history.add_called")
-                    else:
-                        debug_tools.inc("history.monitor.history.record_suppressed")
+                        add_to_history(current_state)
                     self.is_moving = False
 
             return self._pass_through_tick(tick_start)
@@ -380,15 +343,12 @@ class VIEW3D_OT_view_history_monitor(bpy.types.Operator):
         self.last_maintenance_time = 0.0
         self._timer = context.window_manager.event_timer_add(self.CHECK_INTERVAL, window=context.window)
         context.window_manager.modal_handler_add(self)
-        debug_tools.log("view history monitor started")
         return {'RUNNING_MODAL'}
     
     def cancel(self, context):
         utils.monitor_running = False
         if self._timer:
             context.window_manager.event_timer_remove(self._timer)
-        debug_tools.log("view history monitor stopped")
-
 
 class VIEW3D_OT_view_history_back(bpy.types.Operator):
     """Go back in view history"""
@@ -407,20 +367,19 @@ class VIEW3D_OT_view_history_back(bpy.types.Operator):
         
         state = history_go_back(context)
         if state:
-            self.report({'INFO'}, f"◄ History {utils.view_history_index + 1}/{len(utils.view_history)}")
+            self.report({'INFO'}, f"< History {utils.view_history_index + 1}/{len(utils.view_history)}")
             # Sync UI properties to new view state
             try:
                 context.scene.viewpilot.reinitialize_from_context(context)
             except (RuntimeError, ReferenceError, AttributeError, ValueError) as e:
-                debug_tools.log(f"error syncing ViewPilot properties: {e}")
+                pass
             return {'FINISHED'}
         else:
             if not utils.view_history:
                 self.report({'WARNING'}, "No history")
             else:
-                self.report({'INFO'}, "◄ Reached start of history")
+                self.report({'INFO'}, "< Reached start of history")
             return {'FINISHED'}
-
 
 class VIEW3D_OT_view_history_forward(bpy.types.Operator):
     """Go forward in view history"""
@@ -439,19 +398,18 @@ class VIEW3D_OT_view_history_forward(bpy.types.Operator):
         
         state = history_go_forward(context)
         if state:
-            self.report({'INFO'}, f"► History {utils.view_history_index + 1}/{len(utils.view_history)}")
+            self.report({'INFO'}, f"> History {utils.view_history_index + 1}/{len(utils.view_history)}")
             # Sync UI properties to new view state
             try:
                 context.scene.viewpilot.reinitialize_from_context(context)
             except (RuntimeError, ReferenceError, AttributeError, ValueError) as e:
-                debug_tools.log(f"error syncing ViewPilot properties: {e}")
+                pass
             return {'FINISHED'}
         else:
             # Show current position even when can't go forward
             display_index = utils.view_history_index + 1 if utils.view_history_index != -1 else len(utils.view_history)
-            self.report({'INFO'}, f"► History {display_index}/{len(utils.view_history)}")
+            self.report({'INFO'}, f"> History {display_index}/{len(utils.view_history)}")
             return {'FINISHED'}
-
 
 # ========================================================================
 # SYNC OPERATOR (for N-Panel/Popover initialization)
@@ -472,7 +430,6 @@ class VIEW3D_OT_sync_viewpilot(bpy.types.Operator):
         except (RuntimeError, ReferenceError, AttributeError, ValueError) as e:
             self.report({'ERROR'}, f"Sync failed: {str(e)}")
             return {'CANCELLED'}
-
 
 class VIEW3D_OT_open_viewpilot_prefs(bpy.types.Operator):
     """Toggle ViewPilot addon preferences"""
@@ -528,7 +485,6 @@ class VIEW3D_OT_toggle_camera_selection(bpy.types.Operator):
         
         return {'FINISHED'}
 
-
 class VIEW3D_OT_toggle_camera_name(bpy.types.Operator):
     """Toggle camera name visibility in viewport"""
     bl_idname = "view3d.toggle_camera_name"
@@ -548,7 +504,6 @@ class VIEW3D_OT_toggle_camera_name(bpy.types.Operator):
         cam_data.show_name = new_state
         cam_obj.show_name = new_state
         return {'FINISHED'}
-
 
 class VIEW3D_OT_exit_camera_view(bpy.types.Operator):
     """Exit camera view (Numpad 0)"""
@@ -580,11 +535,9 @@ class VIEW3D_OT_exit_camera_view(bpy.types.Operator):
         # Sync UI properties immediately
         try:
             context.scene.viewpilot.reinitialize_from_context(context)
-        except (RuntimeError, ReferenceError, AttributeError, ValueError) as error:
-            debug_tools.log(f"exit_camera_view reinitialize failed: {error}")
-        
+        except (RuntimeError, ReferenceError, AttributeError, ValueError):
+            pass
         return {'FINISHED'}
-
 
 class VIEW3D_OT_create_camera_from_view(bpy.types.Operator):
     """Create a new camera matching the current viewport look"""
@@ -680,14 +633,13 @@ class VIEW3D_OT_create_camera_from_view(bpy.types.Operator):
             bpy.ops.view3d.view_center_camera()  # Center/zoom to fit camera frame
             
             if rotated_resolution:
-                self.report({'INFO'}, "New Camera — Output resolution rotated to fit sensor")
+                self.report({'INFO'}, "New Camera - Output resolution rotated to fit sensor")
             else:
                 self.report({'INFO'}, "Created new Active Camera")
         else:
             self.report({'INFO'}, "Created Camera from View")
         
         return {'FINISHED'}
-
 
 class VIEW3D_OT_dolly_to_obstacle(bpy.types.Operator):
     """Move camera backward until it hits an obstacle (useful for maximizing view in tight spaces)"""
@@ -805,7 +757,6 @@ class VIEW3D_OT_dolly_to_obstacle(bpy.types.Operator):
         # Return diagonal length
         return (max_corner - min_corner).length
 
-
 # ========================================================================
 # SAVED VIEWS OPERATORS
 # ========================================================================
@@ -821,7 +772,6 @@ def _suppress_saved_view_enum_load():
     finally:
         controller.skip_enum_load = prev_skip
 
-
 def _set_panel_gallery_enum_safe(context, preferred_value=None):
     """Delegate to the canonical enum-safe setter in properties.py."""
     try:
@@ -829,7 +779,6 @@ def _set_panel_gallery_enum_safe(context, preferred_value=None):
         return _set_safe(context.scene.viewpilot, preferred_value)
     except (ImportError, AttributeError, TypeError, ValueError, RuntimeError):
         return False
-
 
 def _sync_saved_view_enums_safe(context, enum_value):
     """Synchronize dropdown + panel enums without assuming panel supports NONE."""
@@ -840,7 +789,6 @@ def _sync_saved_view_enums_safe(context, enum_value):
         pass
     _set_panel_gallery_enum_safe(context, enum_value)
 
-
 def _handle_storage_invalid(context, reporter, action_label="save view"):
     """Report invalid storage and prompt user with overwrite/cancel options."""
     reporter.report({'ERROR'}, f"Can't {action_label}: ViewPilot storage is corrupted")
@@ -848,11 +796,8 @@ def _handle_storage_invalid(context, reporter, action_label="save view"):
         bpy.ops.viewpilot.recover_storage_overwrite('INVOKE_DEFAULT', action_label=action_label)
     except RuntimeError as error:
         reporter.report({'WARNING'}, "Recovery dialog unavailable (see console)")
-        debug_tools.log(f"failed to show recovery dialog (runtime): {error}")
     except (TypeError, AttributeError, ValueError) as error:
         reporter.report({'WARNING'}, "Recovery dialog unavailable (see console)")
-        debug_tools.log(f"unexpected error showing recovery dialog: {error}")
-
 
 def _refresh_saved_views_ui(include_modal_gallery=True):
     """Invalidate saved-view UI caches and optionally refresh modal gallery."""
@@ -860,17 +805,14 @@ def _refresh_saved_views_ui(include_modal_gallery=True):
         from .properties import invalidate_saved_views_ui_caches
         invalidate_saved_views_ui_caches()
     except (ImportError, AttributeError, TypeError, ValueError, RuntimeError) as error:
-        debug_tools.log(f"saved-view UI cache invalidation fallback path: {error}")
         try:
             from .preview_manager import invalidate_panel_gallery_cache
             invalidate_panel_gallery_cache()
         except (ImportError, AttributeError, TypeError, ValueError, RuntimeError) as fallback_error:
-            debug_tools.log(f"panel gallery cache fallback failed: {fallback_error}")
             pass
 
     if include_modal_gallery and VIEW3D_OT_thumbnail_gallery._is_active:
         VIEW3D_OT_thumbnail_gallery.request_refresh()
-
 
 class VIEWPILOT_OT_recover_storage_overwrite(bpy.types.Operator):
     """Overwrite corrupted ViewPilot storage with a fresh empty payload."""
@@ -917,14 +859,12 @@ class VIEWPILOT_OT_recover_storage_overwrite(bpy.types.Operator):
 
         try:
             data_storage.sync_to_all_scenes()
-        except (RuntimeError, ReferenceError, AttributeError, ValueError) as error:
-            debug_tools.log(f"sync_to_all_scenes failed after storage reset: {error}")
-
+        except (RuntimeError, ReferenceError, AttributeError, ValueError):
+            pass
         _refresh_saved_views_ui()
 
         self.report({'INFO'}, "ViewPilot storage overwritten. You can save views again.")
         return {'FINISHED'}
-
 
 class VIEW3D_OT_save_current_view(bpy.types.Operator):
     """Save the current viewport as a new view"""
@@ -1000,10 +940,6 @@ class VIEW3D_OT_save_current_view(bpy.types.Operator):
                 thumb_module = "<import-failed>"
                 thumb_version = "<import-failed>"
             self.report({'WARNING'}, "Thumbnail generation failed (see console)")
-            debug_tools.log(
-                "thumbnail generation failed: "
-                f"{e} (thumb_module={thumb_module}, thumb_version={thumb_version})"
-            )
             traceback.print_exc()
         
         # Set as active
@@ -1016,7 +952,6 @@ class VIEW3D_OT_save_current_view(bpy.types.Operator):
         
         self.report({'INFO'}, f"Saved view: {view_name}")
         return {'FINISHED'}
-
 
 class VIEW3D_OT_load_saved_view(bpy.types.Operator):
     """Load the selected saved view"""
@@ -1061,7 +996,6 @@ class VIEW3D_OT_load_saved_view(bpy.types.Operator):
         
         self.report({'INFO'}, f"Loaded view: {view_dict.get('name', 'View')}")
         return {'FINISHED'}
-
 
 class VIEW3D_OT_delete_saved_view(bpy.types.Operator):
     """Delete the selected saved view"""
@@ -1131,7 +1065,6 @@ class VIEW3D_OT_delete_saved_view(bpy.types.Operator):
         utils.cleanup_world_fake_users()
         
         return {'FINISHED'}
-
 
 class VIEW3D_OT_update_saved_view(bpy.types.Operator):
     """Update the selected saved view with current viewport"""
@@ -1215,10 +1148,6 @@ class VIEW3D_OT_update_saved_view(bpy.types.Operator):
                 thumb_module = "<import-failed>"
                 thumb_version = "<import-failed>"
             self.report({'WARNING'}, "Thumbnail regeneration failed (see console)")
-            debug_tools.log(
-                "thumbnail regeneration failed: "
-                f"{e} (thumb_module={thumb_module}, thumb_version={thumb_version})"
-            )
             traceback.print_exc()
         
         # Update in JSON storage
@@ -1238,7 +1167,6 @@ class VIEW3D_OT_update_saved_view(bpy.types.Operator):
         
         self.report({'INFO'}, f"Updated view: {view_name}")
         return {'FINISHED'}
-
 
 class VIEW3D_OT_rename_saved_view(bpy.types.Operator):
     """Rename the selected saved view"""
@@ -1345,7 +1273,6 @@ class VIEW3D_OT_rename_saved_view(bpy.types.Operator):
         self.report({'INFO'}, f"Renamed view: {new_name}")
         return {'FINISHED'}
 
-
 class VIEW3D_OT_prev_saved_view(bpy.types.Operator):
     """Go to the previous saved view"""
     bl_idname = "view3d.prev_saved_view"
@@ -1372,10 +1299,9 @@ class VIEW3D_OT_prev_saved_view(bpy.types.Operator):
         
         # Report which view we're on
         view_name = views[new_index].get("name", "View")
-        self.report({'INFO'}, f"◄ {view_name} ({new_index + 1}/{len(views)})")
+        self.report({'INFO'}, f"< {view_name} ({new_index + 1}/{len(views)})")
         
         return {'FINISHED'}
-
 
 class VIEW3D_OT_next_saved_view(bpy.types.Operator):
     """Go to the next saved view"""
@@ -1403,7 +1329,7 @@ class VIEW3D_OT_next_saved_view(bpy.types.Operator):
         
         # Report which view we're on
         view_name = views[new_index].get("name", "View")
-        self.report({'INFO'}, f"► {view_name} ({new_index + 1}/{len(views)})")
+        self.report({'INFO'}, f"> {view_name} ({new_index + 1}/{len(views)})")
         
         return {'FINISHED'}
 
@@ -1446,7 +1372,6 @@ class VIEWPILOT_UL_saved_views_reorder(bpy.types.UIList):
             for idx, view in enumerate(views):
                 icon_map[idx] = get_view_icon_id_fast(view.name, view.thumbnail_image)
         except (ImportError, AttributeError, RuntimeError, ReferenceError, ValueError) as error:
-            debug_tools.log(f"reorder list icon map build failed: {error}")
             icon_map = {}
 
         self._icon_cache_signature = signature
@@ -1479,7 +1404,6 @@ class VIEWPILOT_UL_saved_views_reorder(bpy.types.UIList):
         elif self.layout_type == 'GRID':
             layout.alignment = 'CENTER'
             layout.label(text="", icon='BOOKMARKS')
-
 
 class VIEW3D_OT_reorder_views(bpy.types.Operator):
     """Open a popup to reorder saved views via drag-and-drop"""
@@ -1521,7 +1445,6 @@ class VIEW3D_OT_reorder_views(bpy.types.Operator):
         # Refresh galleries after reordering.
         _refresh_saved_views_ui()
         return {'FINISHED'}
-
 
 class VIEW3D_OT_move_view_up(bpy.types.Operator):
     """Move selected view up in the list"""
@@ -1568,7 +1491,6 @@ class VIEW3D_OT_move_view_up(bpy.types.Operator):
         
         return {'FINISHED'}
 
-
 class VIEW3D_OT_move_view_down(bpy.types.Operator):
     """Move selected view down in the list"""
     bl_idname = "view3d.move_view_down"
@@ -1614,7 +1536,6 @@ class VIEW3D_OT_move_view_down(bpy.types.Operator):
         
         return {'FINISHED'}
 
-
 # ========================================================================
 # CLASSES LIST FOR REGISTRATION
 # ========================================================================
@@ -1645,12 +1566,12 @@ classes = (
     VIEW3D_OT_move_view_down,
 )
 
-
 def register():
     for cls in classes:
         bpy.utils.register_class(cls)
 
-
 def unregister():
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)
+
+

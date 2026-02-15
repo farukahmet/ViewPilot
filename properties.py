@@ -8,7 +8,6 @@ import math
 import time
 from mathutils import Vector, Euler, Quaternion
 from .state_controller import get_controller, UpdateSource, LockPriority
-from . import debug_tools
 from .utils import (
     get_view_location, set_view_location, add_to_history,
     get_selection_center, get_orbit_focus_selection, get_orbit_focus_view_layer_objects, find_view3d_context,
@@ -249,7 +248,7 @@ def update_orbit_mode_toggle(self, context):
                             with bpy.context.temp_override(**override_kwargs):
                                 bpy.ops.view3d.view_all('INVOKE_DEFAULT')
                     except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError) as e:
-                        debug_tools.log(f"framing failed: {e}")
+                        pass
             
             # 4. Start grace period
             controller.start_grace_period(0.5)
@@ -307,7 +306,6 @@ def update_orbit_mode_toggle(self, context):
                         _, _, region_3d = find_view3d_context(bpy.context)
                         
                         if not region_3d:
-                            debug_tools.log("could not find 3D view for orbit init")
                             return None
                         
                         # Get framed camera position
@@ -352,10 +350,9 @@ def update_orbit_mode_toggle(self, context):
                     
                     # Mark as ready
                     props['orbit_initialized'] = True
-                    debug_tools.log(f"orbit initialized: offset={base_offset}, dist={dist:.2f}")
                     
                 except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError, ZeroDivisionError) as e:
-                    debug_tools.log(f"delayed orbit init failed: {e}")
+                    pass
                 
                 return None  # Don't repeat timer
             
@@ -372,7 +369,6 @@ def update_orbit_mode_toggle(self, context):
             
     finally:
         controller.end_update()
-
 
 def update_orbit_transform(self, context):
     """Apply orbit yaw/pitch/roll changes - trackball style rotation around selection.
@@ -533,7 +529,6 @@ def update_orbit_transform(self, context):
         self.invalidate_zoom_state(new_pos, new_quat, preserve_value=True)
     finally:
         controller.end_update()
-
 
 def update_space_toggle(self, context):
     if not self.init_complete: return
@@ -949,7 +944,6 @@ def update_camera_enum(self, context):
     finally:
         controller.end_update()
 
-
 # Saved Views Callbacks
 def get_saved_views_items(self, context):
     """Callback for EnumProperty to list saved views.
@@ -1023,12 +1017,9 @@ def get_saved_views_items(self, context):
 get_saved_views_items._cached_items = []
 get_saved_views_items._building = False
 
-
-
 def invalidate_saved_views_enum_cache():
     """Invalidate cached items for saved views EnumProperty."""
     get_saved_views_items._cached_items = []
-
 
 def invalidate_saved_views_ui_caches():
     """Invalidate caches related to saved views UI (dropdown + panel icon view)."""
@@ -1038,7 +1029,6 @@ def invalidate_saved_views_ui_caches():
         invalidate_panel_gallery_cache()
     except (ImportError, AttributeError, RuntimeError, ValueError):
         pass
-
 
 def _set_panel_gallery_enum_safe(self, preferred_value=None):
     """Set panel_gallery_enum to a valid runtime identifier."""
@@ -1094,7 +1084,6 @@ def _set_panel_gallery_enum_safe(self, preferred_value=None):
     finally:
         controller.skip_enum_load = prev_skip
 
-
 def _sync_saved_view_selection_enums(self, controller, enum_value: str):
     """Keep dropdown and panel gallery enums in sync without triggering loads."""
     prev_skip = controller.skip_enum_load
@@ -1109,7 +1098,6 @@ def _sync_saved_view_selection_enums(self, controller, enum_value: str):
         _set_panel_gallery_enum_safe(self, enum_value)
     finally:
         controller.skip_enum_load = prev_skip
-
 
 def _handle_saved_view_selection(self, context, enum_value: str):
     """Shared handler for selecting/loading a saved view from any UI source."""
@@ -1133,99 +1121,96 @@ def _handle_saved_view_selection(self, context, enum_value: str):
         return
 
     try:
-        with debug_tools.timed("saved_view.load.total"):
-            index = int(enum_value)
-            # Note: saved_views_index will be set AFTER apply_view_to_viewport
-            # because apply may switch scenes, and we need to update the NEW scene's index
+        index = int(enum_value)
+        # Note: saved_views_index will be set AFTER apply_view_to_viewport
+        # because apply may switch scenes, and we need to update the NEW scene's index
 
-            # Reset ghost tracking when manually loading a view
-            self.last_active_view_index = -1
+        # Reset ghost tracking when manually loading a view
+        self.last_active_view_index = -1
 
-            # Get view from JSON storage
-            view_dict = data_storage.get_saved_view(index)
-            if not view_dict:
-                return
+        # Get view from JSON storage
+        view_dict = data_storage.get_saved_view(index)
+        if not view_dict:
+            return
 
-            # Resolve space and region robustly.
-            _, space, region = find_view3d_context(context)
+        # Resolve space and region robustly.
+        _, space, region = find_view3d_context(context)
 
-            if not space or not region:
-                return
+        if not space or not region:
+            return
 
-            # Apply the view to the viewport using data_storage helper
-            # NOTE: This may switch scenes if remember_composition is True!
-            data_storage.apply_view_to_viewport(view_dict, space, region, context)
+        # Apply the view to the viewport using data_storage helper
+        # NOTE: This may switch scenes if remember_composition is True!
+        data_storage.apply_view_to_viewport(view_dict, space, region, context)
 
-            # IMPORTANT: After apply, context.scene may be different!
-            # Update saved_views_index and enums on the CURRENT scene (which may be new)
-            try:
-                controller.skip_enum_load = True
-                context.scene.saved_views_index = index
-                context.scene.viewpilot.saved_views_enum = str(index)
-                _set_panel_gallery_enum_safe(context.scene.viewpilot, str(index))
-            finally:
-                controller.skip_enum_load = False
+        # IMPORTANT: After apply, context.scene may be different!
+        # Update saved_views_index and enums on the CURRENT scene (which may be new)
+        try:
+            controller.skip_enum_load = True
+            context.scene.saved_views_index = index
+            context.scene.viewpilot.saved_views_enum = str(index)
+            _set_panel_gallery_enum_safe(context.scene.viewpilot, str(index))
+        finally:
+            controller.skip_enum_load = False
 
-            # Get rotation for history and property updates
-            rotation = view_dict.get("rotation", [1.0, 0.0, 0.0, 0.0])
-            rot_quat = Quaternion((rotation[0], rotation[1], rotation[2], rotation[3]))
+        # Get rotation for history and property updates
+        rotation = view_dict.get("rotation", [1.0, 0.0, 0.0, 0.0])
+        rot_quat = Quaternion((rotation[0], rotation[1], rotation[2], rotation[3]))
 
-            # Add this view state to history
-            new_state = {
-                'view_location': Vector(view_dict.get("location", [0, 0, 0])),
-                'view_rotation': rot_quat,
-                'view_distance': view_dict.get("distance", 10.0),
-                'view_perspective': 'PERSP' if view_dict.get("is_perspective", True) else 'ORTHO',
-                'is_perspective': view_dict.get("is_perspective", True),
-                'lens': view_dict.get("lens", 50.0),
-                'clip_start': view_dict.get("clip_start", 0.1),
-                'clip_end': view_dict.get("clip_end", 1000.0),
-                'timestamp': time.time()
-            }
+        # Add this view state to history
+        new_state = {
+            'view_location': Vector(view_dict.get("location", [0, 0, 0])),
+            'view_rotation': rot_quat,
+            'view_distance': view_dict.get("distance", 10.0),
+            'view_perspective': 'PERSP' if view_dict.get("is_perspective", True) else 'ORTHO',
+            'is_perspective': view_dict.get("is_perspective", True),
+            'lens': view_dict.get("lens", 50.0),
+            'clip_start': view_dict.get("clip_start", 0.1),
+            'clip_end': view_dict.get("clip_end", 1000.0),
+            'timestamp': time.time()
+        }
 
-            add_to_history(new_state)
+        add_to_history(new_state)
 
-            # Lock history recording using grace period
-            controller.start_grace_period(0.5, UpdateSource.VIEW_RESTORE)
+        # Lock history recording using grace period
+        controller.start_grace_period(0.5, UpdateSource.VIEW_RESTORE)
 
-            # Update properties using direct assignment (no callback triggers)
-            pivot_pos = Vector(view_dict.get("location", [0, 0, 0]))
-            view_z = Vector((0.0, 0.0, 1.0))
-            distance = view_dict.get("distance", 10.0)
-            eye_pos = pivot_pos + (rot_quat @ view_z) * distance
+        # Update properties using direct assignment (no callback triggers)
+        pivot_pos = Vector(view_dict.get("location", [0, 0, 0]))
+        view_z = Vector((0.0, 0.0, 1.0))
+        distance = view_dict.get("distance", 10.0)
+        eye_pos = pivot_pos + (rot_quat @ view_z) * distance
 
-            self['loc_x'] = eye_pos.x
-            self['loc_y'] = eye_pos.y
-            self['loc_z'] = eye_pos.z
+        self['loc_x'] = eye_pos.x
+        self['loc_y'] = eye_pos.y
+        self['loc_z'] = eye_pos.z
 
-            euler = rot_quat.to_euler()
-            self['rot_x'] = euler.x
-            self['rot_y'] = euler.y
-            self['rot_z'] = euler.z
+        euler = rot_quat.to_euler()
+        self['rot_x'] = euler.x
+        self['rot_y'] = euler.y
+        self['rot_z'] = euler.z
 
-            is_persp = view_dict.get("is_perspective", True)
-            if is_persp:
-                self['focal_length'] = view_dict.get("lens", 50.0)
-            else:
-                self['focal_length'] = distance
-            self['clip_start'] = view_dict.get("clip_start", 0.1)
-            self['clip_end'] = view_dict.get("clip_end", 1000.0)
+        is_persp = view_dict.get("is_perspective", True)
+        if is_persp:
+            self['focal_length'] = view_dict.get("lens", 50.0)
+        else:
+            self['focal_length'] = distance
+        self['clip_start'] = view_dict.get("clip_start", 0.1)
+        self['clip_end'] = view_dict.get("clip_end", 1000.0)
 
-            self['is_perspective'] = is_persp
+        self['is_perspective'] = is_persp
 
-            # Reset zoom to 0 (it's a relative delta, not absolute)
-            # base_world_pos is the reference point for future zoom changes
-            self['zoom_level'] = 0.0
-            self['base_world_pos'] = (eye_pos.x, eye_pos.y, eye_pos.z)
+        # Reset zoom to 0 (it's a relative delta, not absolute)
+        # base_world_pos is the reference point for future zoom changes
+        self['zoom_level'] = 0.0
+        self['base_world_pos'] = (eye_pos.x, eye_pos.y, eye_pos.z)
 
-            self['screen_x'] = 0.0
-            self['screen_z'] = 0.0
+        self['screen_x'] = 0.0
+        self['screen_z'] = 0.0
     except (ValueError, AttributeError):
         pass
     finally:
         controller.end_update()
-
-
 
 def update_panel_gallery_enum(self, context):
     """Load the selected view when panel gallery enum changes."""
@@ -1241,14 +1226,12 @@ def update_panel_gallery_enum(self, context):
 
     _handle_saved_view_selection(self, context, enum_value)
 
-
 def update_saved_views_enum(self, context):
     """Load the selected view when enum changes (for saved_views_enum dropdown)."""
     controller = get_controller()
     if controller.skip_enum_load:
         return
     _handle_saved_view_selection(self, context, self.saved_views_enum)
-
 
 # ============================================================================
 # HELPER: Sync SavedViewItem property changes to JSON storage
@@ -1289,8 +1272,7 @@ def _sync_view_to_json(view_item, context, prop_name):
             data["saved_views"] = views
             data_storage.save_data(data)
     except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError) as e:
-        debug_tools.log(f"failed to sync '{prop_name}' to JSON: {e}")
-
+        pass
 
 # ============================================================================
 # PROPERTY GROUPS

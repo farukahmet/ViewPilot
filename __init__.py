@@ -12,7 +12,6 @@ import bpy
 import importlib
 from . import utils
 from . import preferences
-from . import debug_tools
 from . import operators
 from . import ui
 from . import properties
@@ -24,7 +23,6 @@ from . import data_storage
 
 from .utils import reset_history_handler, start_monitor
 from .preferences import get_preferences
-
 
 class VIEW3D_OT_viewport_controls(bpy.types.Operator):
     bl_idname = "view3d.viewport_controls"
@@ -54,7 +52,6 @@ class VIEW3D_OT_viewport_controls(bpy.types.Operator):
 
 addon_keymaps = []
 
-
 def register():
     # Reload modules to pick up changes without restarting Blender.
     # Order matters:
@@ -63,7 +60,6 @@ def register():
     # - modal_gallery must come BEFORE operators (operators imports from it).
     importlib.reload(utils)
     importlib.reload(preferences)
-    importlib.reload(debug_tools)
     importlib.reload(data_storage)  # Before properties!
     importlib.reload(temp_paths)
     importlib.reload(thumbnail_generator)  # Before operators!
@@ -84,7 +80,6 @@ def register():
 
     # Register Preferences
     preferences.register()
-    debug_tools.register()
     properties.register()
     operators.register()
     ui.register()
@@ -205,8 +200,6 @@ def unregister():
     
     # Unregister preferences module 
     from . import preferences as pref_module
-    from . import debug_tools as debug_tools_module
-    debug_tools_module.unregister()
     pref_module.unregister()
 
     # Unregister properties module
