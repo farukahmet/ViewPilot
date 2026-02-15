@@ -1,6 +1,6 @@
 bl_info = {
-    "name"          : "ViewPilot_TEST",
-    "description"   : "Control, capture, and recall exactly what you see in your viewport at certain moments",
+    "name"          : "ViewPilot",
+    "description"   : "Control, capture, and recall *exactly* what you see in your viewport.",
     "author"        : "Faruk Ahmet",
     "version"       : (1, 0, 0),
     "blender"       : (4, 2, 0),
