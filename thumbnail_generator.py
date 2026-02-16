@@ -22,8 +22,6 @@ import traceback
 from . import utils
 from .temp_paths import make_temp_png_path
 
-THUMBNAIL_RENDERER_VERSION = "2026-02-11-write-still"
-
 def _temp_thumbnail_path(image_name):
     """Get a deterministic temp path for OpenGL thumbnail output."""
     return make_temp_png_path("_vp_thumb_", image_name)

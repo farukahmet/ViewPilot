@@ -782,7 +782,6 @@ def reset_history_handler(dummy):
     global view_history, view_history_index
     view_history.clear()
     view_history_index = -1
-    print("[View History] Reset on Load")
     
     # Initialize data storage (creates Text datablock if needed)
     # This is deferred to load_post because bpy.data.texts isn't available during registration
@@ -791,9 +790,7 @@ def reset_history_handler(dummy):
         data_storage.ensure_data_initialized()
         
         # Migrate from old per-scene storage if needed (one-time migration)
-        migrated = data_storage.migrate_from_scene_storage()
-        if migrated > 0:
-            print(f"[ViewPilot] Migrated {migrated} views from scene storage to JSON")
+        data_storage.migrate_from_scene_storage()
         
         # Sync JSON to PropertyGroup for UIList/UI compatibility
         import bpy
@@ -801,9 +798,7 @@ def reset_history_handler(dummy):
             # Initialize UUIDs for all scenes and view layers
             data_storage.initialize_all_uuids()
             
-            synced = data_storage.sync_to_all_scenes()
-            if synced > 0:
-                print(f"[ViewPilot] Synced {synced} views to PropertyGroup")
+            data_storage.sync_to_all_scenes()
     except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError, OSError) as e:
         print(f"[ViewPilot] Data storage init failed: {e}")
     

@@ -68,16 +68,6 @@ def register():
     importlib.reload(ui)
     importlib.reload(properties)
     importlib.reload(preview_manager)
-    try:
-        print(
-            "[ViewPilot] Thumbnail module loaded:",
-            getattr(thumbnail_generator, "__file__", "<unknown>"),
-            "version=",
-            getattr(thumbnail_generator, "THUMBNAIL_RENDERER_VERSION", "<unknown>"),
-        )
-    except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError):
-        pass
-
     # Register Preferences
     preferences.register()
     properties.register()
@@ -91,18 +81,14 @@ def register():
     def _deferred_init():
         try:
             data_storage.ensure_data_initialized()
-            migrated = data_storage.migrate_from_scene_storage()
-            if migrated > 0:
-                print(f"[ViewPilot] Migrated {migrated} views from scene storage to JSON")
+            data_storage.migrate_from_scene_storage()
             
             # Initialize UUIDs for all scenes and view layers
             data_storage.initialize_all_uuids()
             
             # Sync JSON to PropertyGroup for UIList compatibility
             if hasattr(bpy.context, 'scene') and bpy.context.scene:
-                synced = data_storage.sync_to_all_scenes()
-                if synced > 0:
-                    print(f"[ViewPilot] Synced {synced} views to PropertyGroup")
+                data_storage.sync_to_all_scenes()
         except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError, OSError) as e:
             print(f"[ViewPilot] Deferred init failed: {e}")
         return None  # Don't repeat

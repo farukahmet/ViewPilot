@@ -931,14 +931,7 @@ class VIEW3D_OT_save_current_view(bpy.types.Operator):
             # Notify gallery to refresh if open
             if VIEW3D_OT_thumbnail_gallery._is_active:
                 VIEW3D_OT_thumbnail_gallery.request_refresh()
-        except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError, OSError) as e:
-            try:
-                from . import thumbnail_generator as _thumb_mod
-                thumb_module = getattr(_thumb_mod, "__file__", "<unknown>")
-                thumb_version = getattr(_thumb_mod, "THUMBNAIL_RENDERER_VERSION", "<unknown>")
-            except (ImportError, AttributeError):
-                thumb_module = "<import-failed>"
-                thumb_version = "<import-failed>"
+        except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError, OSError):
             self.report({'WARNING'}, "Thumbnail generation failed (see console)")
             traceback.print_exc()
         
@@ -1139,14 +1132,7 @@ class VIEW3D_OT_update_saved_view(bpy.types.Operator):
             # Notify gallery to refresh if open
             if VIEW3D_OT_thumbnail_gallery._is_active:
                 VIEW3D_OT_thumbnail_gallery.request_refresh()
-        except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError, OSError) as e:
-            try:
-                from . import thumbnail_generator as _thumb_mod
-                thumb_module = getattr(_thumb_mod, "__file__", "<unknown>")
-                thumb_version = getattr(_thumb_mod, "THUMBNAIL_RENDERER_VERSION", "<unknown>")
-            except (ImportError, AttributeError):
-                thumb_module = "<import-failed>"
-                thumb_version = "<import-failed>"
+        except (RuntimeError, ReferenceError, AttributeError, TypeError, ValueError, OSError):
             self.report({'WARNING'}, "Thumbnail regeneration failed (see console)")
             traceback.print_exc()
         
