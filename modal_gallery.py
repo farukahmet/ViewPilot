@@ -366,6 +366,17 @@ class VIEW3D_OT_thumbnail_gallery(bpy.types.Operator):
                     context.area.tag_redraw()
                     
             return {'PASS_THROUGH'}
+
+        # Rename hovered view with F2 (independent from active selection/index)
+        elif event.type == 'F2' and event.value == 'PRESS':
+            hover_index = self._hover_index
+            if hover_index >= 0:
+                from . import data_storage
+                if hover_index >= len(data_storage.get_saved_views()):
+                    return {'PASS_THROUGH'}
+                bpy.ops.view3d.rename_saved_view('INVOKE_DEFAULT', index=hover_index)
+                return {'RUNNING_MODAL'}
+            return {'PASS_THROUGH'}
         
         if event.type == 'LEFTMOUSE' and event.value == 'PRESS':
             mx, my = self._get_mouse_region_coords(event)

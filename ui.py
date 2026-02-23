@@ -141,7 +141,7 @@ def draw_viewpilot_controls(layout, context, location='popup'):
             row = layout.row(align=True)
             zoom_label = "Zoom (Dolly)" if props.is_perspective else "Zoom (Scale)"
             row.prop(props, "zoom_level", text=zoom_label, icon='ZOOM_ALL')
-            row.scale_y = 1.4
+            row.scale_y = 2
         
         layout.separator()
         

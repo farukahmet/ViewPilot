@@ -1157,8 +1157,9 @@ class VIEW3D_OT_update_saved_view(bpy.types.Operator):
 class VIEW3D_OT_rename_saved_view(bpy.types.Operator):
     """Rename the selected saved view"""
     bl_idname = "view3d.rename_saved_view"
-    bl_label = "Rename Saved View"
-    bl_options = {'REGISTER', 'UNDO', 'INTERNAL'}
+    bl_label = ""
+    bl_property = "new_name"
+    bl_options = {'UNDO', 'INTERNAL'}
     
     # Optional index - if >= 0, use this instead of saved_views_index
     index: bpy.props.IntProperty(default=-1)
@@ -1169,7 +1170,8 @@ class VIEW3D_OT_rename_saved_view(bpy.types.Operator):
             return self.index
         return context.scene.saved_views_index
 
-    def _rename_associated_camera(self, old_name: str, new_name: str) -> None:
+    @staticmethod
+    def _rename_associated_camera(old_name: str, new_name: str) -> None:
         """Rename camera datablocks associated with this view name."""
         try:
             from .preferences import get_preferences
@@ -1187,11 +1189,11 @@ class VIEW3D_OT_rename_saved_view(bpy.types.Operator):
                 if obj.data:
                     obj.data.name = new_cam_name
                 break
-    
+
     new_name: bpy.props.StringProperty(
-        name="",
+        name="New Name",
         description="New name for the saved view",
-        default=""
+        default="",
     )
     
     @classmethod
@@ -1220,10 +1222,7 @@ class VIEW3D_OT_rename_saved_view(bpy.types.Operator):
         return context.window_manager.invoke_props_dialog(self, width=260)
     
     def draw(self, context):
-        layout = self.layout
-        layout.label(text="Rename View:")
-        
-        row = layout.row()
+        row = self.layout.row()
         row.activate_init = True
         row.prop(self, "new_name", text="")
     
